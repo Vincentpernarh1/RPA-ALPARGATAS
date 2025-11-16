@@ -18,7 +18,7 @@ import shutil
 import time
 from datetime import date, timedelta
 
-from Tasks import Login_and_Navigation
+from Tasks import Login_and_Navigation ,Order_datas_from_sharepoint
 
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -173,6 +173,10 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         # small wait so profile files are loaded
         time.sleep(1)
 
+
+
+    
+        # Order_datas_from_sharepoint(q)
         Login_and_Navigation(page, url, q, username, password)
 
     except Exception as e:
