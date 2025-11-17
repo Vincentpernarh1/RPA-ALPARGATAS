@@ -133,11 +133,12 @@ def safe_copy(src_root: str, dst_root: str, items: list):
 def run_automation(playwright: Playwright, q: queue.Queue):
     try:
         q.put(("status", "Carregando credenciais..."))
-        q.put(("progress", 5))
+        q.put(("progress", 3))
         credentials = load_credentials()
         url, username, password = credentials['url'], credentials['user'], credentials['password']
 
         q.put(("status", "Iniciando navegador..."))
+        q.put(("progress", 5))
 
         # real Chrome profile (Default folder). No trailing space.
         real_profile_root = r"C:\Users\perna\AppData\Local\Google\Chrome\User Data\Default"
@@ -153,6 +154,7 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         os.makedirs(dst_profile, exist_ok=True)
 
         q.put(("status", "Copiando arquivos do perfil (somente essenciais)..."))
+        q.put(("progress", 8))
         safe_copy(real_profile_root, dst_profile, PROFILE_ITEMS)
 
         # Launch Chromium with the copied profile (uses Chrome user-data content)
