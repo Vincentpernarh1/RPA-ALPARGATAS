@@ -489,12 +489,13 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
                 page.locator("#iframe-servico").content_frame.get_by_role("button", name="ir para a lista de logs").click()
                 page.pause()
 
-                # page1.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="/11/2025 13:14:23").click()
-                # page1.locator("#iframe-servico").content_frame.get_by_role("row", name="Expandir 17/11/2025 13:14:").locator("div").first.click()
-                # page1.locator("#iframe-servico").content_frame.get_by_text("Sucesso").click()
-                # page1.locator("#iframe-servico").content_frame.get_by_text("Erro", exact=True).click()
-                # page1.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Erro ao gerar a demanda \"").click()
+                # Extrair_logs_de_upload_e_Atualizar_sharepoint(page, q)
 
+                # page.locator("#iframe-servico").content_frame.get_by_role("row", name="Expandir 21/11/2025 12:26:").locator("div").first.click()
+                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Sucesso").click()
+                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Erro", exact=True).click()
+                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Erro ao gerar a demanda \"").click()
+                
                 page.wait_for_timeout(1000)
             except TimeoutError:
                 q.put(("status", "    -> ℹ️ No explicit confirm button found (may auto-submit)"))
@@ -710,6 +711,8 @@ def processar_excel_com_dados(file_path: str, items: list, q):
 
 
 
+# def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, q):
+#     print("Function 'Extrair_logs_de_upload_e_Atualizar_sharepoint' called.")
 
 
 
