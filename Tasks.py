@@ -42,7 +42,7 @@ from msgraph.generated.drives.item.items.item.workbook.worksheets.item.used_rang
 
 
 
-from Azure_Access import main,update_excel_rows
+from Azure_Access import main, update_excel_rows, update_protocol_async
 
 base_path = os.getcwd()
 
@@ -132,13 +132,41 @@ def azure_main_in_thread(result_queue: queue.Queue):
     finally:
         # Clean up the loop
         loop.close()
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+
+# +++++++++ HELPER FUNCTION TO UPDATE SHAREPOINT PROTOCOL IN BACKGROUND +++++++++
+def update_sharepoint_protocol_in_thread(drive_id: str, file_id: str, protocol_data: dict, q: queue.Queue):
+    """
+    Run SharePoint protocol update in a background thread (non-blocking).
+    
+    Args:
+        drive_id: SharePoint drive ID
+        file_id: Excel file ID
+        protocol_data: Dict with {chave, carro, protocol}
+        q: Queue for status updates
+    """
+    try:
+        # Create and set a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Run the async update function
+        protocol_data_list = [protocol_data]  # Wrap in list as function expects list
+        loop.run_until_complete(update_protocol_async(drive_id, file_id, protocol_data_list))
+        
+        q.put(("status", f"    -> ✅ SharePoint atualizado: {protocol_data['chave']}-{protocol_data['carro']} = {protocol_data['protocol']}"))
+    except Exception as e:
+        q.put(("status", f"    -> ⚠️ Erro ao atualizar SharePoint: {e}"))
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Clean up the loop
+        loop.close()
 
 
 def Order_datas_from_sharepoint(q):
     
-    q.put(("status", "Fetching Azure data..."))
+    q.put(("status", "Obtendo dados do Azure..."))
     result_queue = queue.Queue() # A new queue just for this thread's result
     
     # Create and start the thread, targeting our new helper function
@@ -153,35 +181,35 @@ def Order_datas_from_sharepoint(q):
         result = result_queue.get_nowait() 
         if isinstance(result, Exception):
             # If the thread sent back an error, handle it
-            q.put(("status", f"❌ Error fetching Azure data: {result}"))
+            q.put(("status", f"❌ Erro ao obter dados do Azure: {result}"))
             raise result # Re-raise the error
         
         df, drive_id, file_id = result
         df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
       
-        q.put(("status", "✅ Azure data fetched successfully."))
+        q.put(("status", "✅ Dados do Azure obtidos com sucesso."))
         
         return df, drive_id, file_id
 
     except queue.Empty:
         # This shouldn't happen if join() worked, but it's safe to have
-        q.put(("status", "❌ Azure thread finished with no result."))
+        q.put(("status", "❌ Thread do Azure finalizou sem resultado."))
         return None, None, None
     except Exception as e:
         # Handle any other error
-        q.put(("status", f"❌ Failed to process Azure result: {e}"))
+        q.put(("status", f"❌ Falha ao processar resultado do Azure: {e}"))
         return None, None, None
 
 
 def Login_and_Navigation(page: Page, url, q, username, password):
     
     try:
-        q.put(("status", "Navigating to login page..."))
+        q.put(("status", "Navegando para página de login..."))
         page.goto(url, timeout=60000)
         page.wait_for_load_state("domcontentloaded")
 
         q.put(("progress", 2))
-        q.put(("status", "Performing login..."))
+        q.put(("status", "Realizando login..."))
 
         # Simulate human-like typing
         page.get_by_role("textbox", name="E-mail ou telefone").click()
@@ -197,7 +225,7 @@ def Login_and_Navigation(page: Page, url, q, username, password):
 
         human_like_delay(0.1, 0.2)
 
-        q.put(("status", "Checking for Cloudflare verification..."))
+        q.put(("status", "Verificando autenticação Cloudflare..."))
         from playwright.sync_api import TimeoutError
 
         # Set a specific, reasonable timeout for this operation, e.g., 5 seconds (5000 ms)
@@ -212,11 +240,11 @@ def Login_and_Navigation(page: Page, url, q, username, password):
 
         except TimeoutError:
             # This exception is raised only if the element doesn't appear within the timeout
-            q.put(("status", "Success element not detected within timeout. Continuing..."))
+            q.put(("status", "Elemento de sucesso não detectado no tempo limite. Continuando..."))
             
         except Exception as e:
             # Handle any other unexpected errors during the wait
-            q.put(("status", f"Error while checking for success element: {e}"))
+            q.put(("status", f"Erro ao verificar elemento de sucesso: {e}"))
             
         # --- Human-like activity before clicking login ---
         page.mouse.wheel(0, 200)
@@ -224,17 +252,17 @@ def Login_and_Navigation(page: Page, url, q, username, password):
         page.mouse.move(random.randint(100, 300), random.randint(400, 500))
 
         # --- Click Login Button ---
-        q.put(("status", "Submitting login..."))
+        q.put(("status", "Enviando login..."))
         page.get_by_role("button", name="Entrar").hover()
         human_like_delay(0.1, 0.5)
         page.get_by_role("button", name="Entrar").click()
         
         try:
             page.get_by_role("button", name="Gestão de Pedidos Gestão da")
-            q.put(("status", "✅ Login successful"))
+            q.put(("status", "✅ Login realizado com sucesso"))
             q.put(("progress", 5))
         except TimeoutError:
-            q.put(("status", "⚠️ Login attempt failed "))
+            q.put(("status", "⚠️ Tentativa de login falhou "))
             page.screenshot(path="login_failed.png")
         page.get_by_role("button", name="Gestão de Pedidos Gestão da").click()
         page.locator("#iframe-servico").content_frame.get_by_role("button", name="AÇÕES").click()
@@ -245,7 +273,7 @@ def Login_and_Navigation(page: Page, url, q, username, password):
         page.wait_for_timeout(100000)
 
     except Exception as e:
-        q.put(("status", f"❌ Error during login: {e}"))
+        q.put(("status", f"❌ Erro durante o login: {e}"))
 
 
 
@@ -255,11 +283,11 @@ def process_orders(page: Page, q):
     static_data = load_static_data()  # Load static data at the start
     try:
         q.put(("progress", 10))
-        q.put(("status", "Fetching order data from SharePoint..."))
+        q.put(("status", "Obtendo dados de pedidos do SharePoint..."))
         df, drive_id, file_id = Order_datas_from_sharepoint(q)
 
         if df is None or df.empty:
-            q.put(("status", "⚠️ No order data found to process."))
+            q.put(("status", "⚠️ Nenhum dado de pedido encontrado para processar."))
             return
 
         df['PRODUTO INTERNO CLIENTE'] = df['PRODUTO INTERNO CLIENTE'].astype(str)
@@ -271,14 +299,14 @@ def process_orders(page: Page, q):
         total_groups = len(grouped_orders)
         total_items = len(df)
         q.put(("progress", 15))
-        q.put(("status", f"Found {total_items} total items in {total_groups} unique groups."))
+        q.put(("status", f"Encontrados {total_items} itens no total em {total_groups} grupos únicos."))
         
         frame_locator = page.locator("#iframe-servico").first.content_frame
         
         # --- LOOP 1: By Unique 'chave_pedido_loja' ---
         for group_index, (chave, group_df) in enumerate(grouped_orders):
             
-            q.put(("status", f"--- Processing Group {group_index + 1}/{total_groups}: {chave} ---"))
+            q.put(("status", f"--- Processando Grupo {group_index + 1}/{total_groups}: {chave} ---"))
             
             # Calculate progress: 15% (initial) + 70% (processing) = 85% max before upload
             progress_per_group = 70 / total_groups if total_groups > 0 else 0
@@ -291,7 +319,7 @@ def process_orders(page: Page, q):
                 
                 page.wait_for_timeout(2000) # 2 seconds
 
-                q.put(("status", "    -> Waiting for filter result..."))
+                q.put(("status", "    -> Aguardando resultado do filtro..."))
                 
                 data_locator = frame_locator.locator(".dx-row.dx-data-row > td:nth-child(8)").first
                 sem_dados_locator = frame_locator.get_by_text("Sem dados")
@@ -299,12 +327,12 @@ def process_orders(page: Page, q):
                 try:
                     # 1. Check for data (with a shorter timeout, as the page is stable)
                     data_locator.wait_for(state="visible", timeout=5000)
-                    q.put(("status", "    -> Data found. Proceeding to CARRO groups."))
+                    q.put(("status", "    -> Dados encontrados. Prosseguindo para grupos CARRO."))
 
                 except TimeoutError:
                     # 2. No data found. Check for "Sem dados"
                     if sem_dados_locator.is_visible():
-                        q.put(("status", "    -> 'Sem dados' found for this group. Skipping."))
+                        q.put(("status", "    -> 'Sem dados' encontrado para este grupo. Pulando."))
                         for _, row in group_df.iterrows():
                             not_found_items.append({
                                 "chave": chave,
@@ -313,16 +341,16 @@ def process_orders(page: Page, q):
                             })
                         continue 
                     else:
-                        q.put(("status", "    -> ERROR: No data row OR 'Sem dados' text found. Skipping group."))
+                        q.put(("status", "    -> ERRO: Nenhuma linha de dados OU texto 'Sem dados' encontrado. Pulando grupo."))
                         continue 
 
                 # --- LOOP 2: Group by 'CARRO' within this chave_pedido_loja ---
                 grouped_by_carro = group_df.groupby('CARRO')
                 total_carros = len(grouped_by_carro)
-                q.put(("status", f"    -> Found {total_carros} CARRO groups for {chave}"))
+                q.put(("status", f"    -> Encontrados {total_carros} grupos CARRO para {chave}"))
                 
                 for carro_index, (carro, carro_df) in enumerate(grouped_by_carro):
-                    q.put(("status", f"    --- Processing {carro_index + 1}/{total_carros}: {carro} for {chave} ---"))
+                    q.put(("status", f"    --- Processando {carro_index + 1}/{total_carros}: {carro} para {chave} ---"))
                     
                     found_items = []  # Reset for each CARRO group
                     
@@ -337,7 +365,7 @@ def process_orders(page: Page, q):
                         else:
                             quantidade = (row['Qtd. Faturada']/12)
                     
-                        q.put(("status", f"        -> Filtering for product: {produto_interno_cliente}"))
+                        q.put(("status", f"        -> Filtrando produto: {produto_interno_cliente}"))
                        
                         product_filter_input = frame_locator.locator("input[aria-label='Filtro de célula']").nth(3)
                                           
@@ -348,11 +376,11 @@ def process_orders(page: Page, q):
                         
                         page.wait_for_timeout(1000) # 1 second
 
-                        q.put(("status", "        -> Waiting for product filter result..."))
+                        q.put(("status", "        -> Aguardando resultado do filtro de produto..."))
                         
                         try:
                             data_locator.wait_for(state="visible", timeout=4000)
-                            q.put(("status", "        -> Product found."))
+                            q.put(("status", "        -> Produto encontrado."))
 
                             # Click all visible checkboxes for this product
                             checkboxes = page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Selecionar linha").get_by_role("checkbox")
@@ -364,10 +392,10 @@ def process_orders(page: Page, q):
                                         checkboxes.nth(idx).click()
                                         page.wait_for_timeout(100)  # Small delay between clicks
                                     except Exception as click_err:
-                                        q.put(("status", f"        -> Warning: Could not click checkbox {idx}: {click_err}"))
-                                q.put(("status", f"        -> Clicked {checkbox_count} checkboxes"))
+                                        q.put(("status", f"        -> Aviso: Não foi possível clicar na checkbox {idx}: {click_err}"))
+                                q.put(("status", f"        -> Clicado em {checkbox_count} checkboxes"))
                             else:
-                                q.put(("status", "        -> ⚠️ No checkboxes found to select"))
+                                q.put(("status", "        -> ⚠️ Nenhuma checkbox encontrada para selecionar"))
 
                             found_items.append({
                                     "numero_cliente": numero_cliente,
@@ -384,7 +412,7 @@ def process_orders(page: Page, q):
 
                         except TimeoutError:
                             if sem_dados_locator.is_visible():
-                                q.put(("status", f"        -> 'Sem dados' for product {produto_interno_cliente}. Skipping item."))
+                                q.put(("status", f"        -> 'Sem dados' para produto {produto_interno_cliente}. Pulando item."))
                                 not_found_items.append({
                                     "chave": chave,
                                     "produto": produto_interno_cliente,
@@ -393,7 +421,7 @@ def process_orders(page: Page, q):
                                 })
                                 continue
                             else:
-                                q.put(("status", "        -> ERROR: No product row OR 'Sem dados' text found. Skipping item."))
+                                q.put(("status", "        -> ERRO: Nenhuma linha de produto OU texto 'Sem dados' encontrado. Pulando item."))
                                 continue
                             
                         # --- Clear product filter ---
@@ -402,12 +430,12 @@ def process_orders(page: Page, q):
 
                     # --- Process and upload Excel file for this CARRO group ---
                     if found_items:
-                        q.put(("status", f"    -> Processing and uploading Excel file for {chave}-{carro}..."))
-                        processar_e_Fazer_upload_Arquivos(page, found_items, q)
-                        q.put(("status", f"    ✅ Finished {chave}-{carro} (Group {carro_index + 1}/{total_carros})"))
+                        q.put(("status", f"    -> Processando e enviando arquivo Excel para {chave}-{carro}..."))
+                        processar_e_Fazer_upload_Arquivos(page, found_items, q, drive_id, file_id)
+                        q.put(("status", f"    ✅ Finalizado {chave}-{carro} (Grupo {carro_index + 1}/{total_carros})"))
                     else:
-                        q.put(("status", f"    ⚠️ No items found for {chave}-{carro}. Skipping upload."))
-                q.put(("status", f"✅ Finished all CARROs for group: {chave}"))
+                        q.put(("status", f"    ⚠️ Nenhum item encontrado para {chave}-{carro}. Pulando envio."))
+                q.put(("status", f"✅ Finalizados todos os CARROs para o grupo: {chave}"))
                 
                 # Update progress at end of group
                 progress_per_group = 70 / total_groups if total_groups > 0 else 0
@@ -419,29 +447,36 @@ def process_orders(page: Page, q):
                 page.wait_for_timeout(500)
 
             except Exception as e:
-                q.put(("status", f"❌ Error on group {chave}: {e}. Skipping to next group."))
+                q.put(("status", f"❌ Erro no grupo {chave}: {e}. Pulando para o próximo grupo."))
                 try:
                     frame_locator.locator(".dx-texteditor-input").first.fill("")
                 except Exception as e_clear:
-                    q.put(("status", f"    -> Failed to clear input: {e_clear}"))
+                    q.put(("status", f"    -> Falha ao limpar campo: {e_clear}"))
 
-        q.put(("status", "🎉 All order groups processed successfully."))
+        q.put(("status", "🎉 Todos os grupos de pedidos processados com sucesso."))
         q.put(("progress", 95))
 
-        q.put(("status", "Finalizing..."))
+        q.put(("status", "Finalizando..."))
         if not_found_items:
-            q.put(("status", f"⚠️ Found {len(not_found_items)} items that were not on the site:"))
+            q.put(("status", f"⚠️ Encontrados {len(not_found_items)} itens que não estavam no site:"))
         
         q.put(("progress", 100))
            
     except Exception as e:
-        q.put(("status", f"❌ A critical error occurred: {e}"))
+        q.put(("status", f"❌ Ocorreu um erro crítico: {e}"))
 
 
-def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
+def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str = None, file_id: str = None):
     """
     Download Excel file, process it with xlwings, fill data from items,
     save and prepare for upload to page.
+    
+    Args:
+        page: Playwright Page object
+        items: List of items to process
+        q: Queue for status updates
+        drive_id: SharePoint drive ID (for background protocol update)
+        file_id: SharePoint Excel file ID (for background protocol update)
     """
     page.locator("#iframe-servico").content_frame.get_by_role("button", name="DOWNLOAD PLANILHA").click()
 
@@ -458,28 +493,28 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
     
     if os.path.exists(save_path):
         os.remove(save_path)
-        q.put(("status", f"Existing file {save_path} removed."))
+        q.put(("status", f"Arquivo existente {save_path} removido."))
     download.save_as(save_path)
 
     # Process the Excel file with xlwings
     pedidos = processar_excel_com_dados(save_path, items,q)
     if pedidos == 'Done':
         print("Excel processing completed successfully.")
-        q.put(("status", "    ✅ Excel processing completed successfully."))
+        q.put(("status", "    ✅ Processamento do Excel concluído com sucesso."))
 
         try:
-            q.put(("status", "    -> Preparing to upload file..."))
+            q.put(("status", "    -> Preparando para enviar arquivo..."))
             page.wait_for_timeout(1000)  # Wait for page stability
             
             # Click the "Upload da planilha" button
             upload_button = page.locator("#iframe-servico").content_frame.get_by_role("button", name="Upload da planilha")
             upload_button.wait_for(state="visible", timeout=5000)
             upload_button.click()
-            q.put(("status", "    -> Clicked 'Upload da planilha' button"))
+            q.put(("status", "    -> Clicado no botão 'Upload da planilha'"))
             page.wait_for_timeout(1000)
             
             # Wait for the modal/upload dialog to appear
-            q.put(("status", "    -> Waiting for upload dialog..."))
+            q.put(("status", "    -> Aguardando janela de upload..."))
             page.wait_for_timeout(1000)
             
             frame = page.locator("#iframe-servico").content_frame
@@ -487,11 +522,11 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
             
             # Wait for the file input to be ready
             file_input.wait_for(state="attached", timeout=5000)
-            q.put(("status", "    -> Found file input element"))
+            q.put(("status", "    -> Elemento de entrada de arquivo encontrado"))
             
             # Set the file directly to the input element
             file_input.set_input_files(save_path)
-            q.put(("status", f"    -> ✅ File uploaded: {os.path.basename(save_path)}"))
+            q.put(("status", f"    -> ✅ Arquivo enviado: {os.path.basename(save_path)}"))
             page.wait_for_timeout(2000)  # Wait for upload to process
             
             # Look for a confirm/submit button after upload
@@ -499,10 +534,10 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
                 confirm_button = frame.get_by_role("button", name=re.compile(r"(Enviar|Confirmar|OK|Upload)", re.IGNORECASE))
                 confirm_button.wait_for(state="visible", timeout=3000)
                 confirm_button.click()
-                q.put(("status", "    -> Clicked confirm button"))
+                q.put(("status", "    -> Clicado no botão confirmar"))
                 page.locator("#iframe-servico").content_frame.get_by_role("button", name="ir para a lista de logs").click()
                 page.wait_for_timeout(2000)  # Wait for logs page to load
-                q.put(("status", "    -> Navigated to logs page"))
+                q.put(("status", "    -> Navegado para página de logs"))
 
                 # Extract protocol and get chave/carro from first item
                 if items:
@@ -510,14 +545,27 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
                     carro = items[0].get('carro', '')
                     protocol_data = Extrair_logs_de_upload_e_Atualizar_sharepoint(page, chave, carro, q)
                     
-                    if protocol_data:
-                        q.put(("status", f"    ✅ Protocol data: {protocol_data}"))
-                        # TODO: Store protocol_data for SharePoint update
+                    if protocol_data and drive_id and file_id:
+                        q.put(("status", f"    ✅ Dados do protocolo: {protocol_data}"))
+                        
+                        # Launch background thread to update SharePoint (NON-BLOCKING)
+                        # This allows automation to continue immediately to next group
+                        q.put(("status", "    -> 🚀 Iniciando atualização do SharePoint em segundo plano..."))
+                        update_thread = threading.Thread(
+                            target=update_sharepoint_protocol_in_thread,
+                            args=(drive_id, file_id, protocol_data, q),
+                            daemon=True  # Daemon thread won't block program exit
+                        )
+                        update_thread.start()
+                        q.put(("status", "    -> ✅ Atualização em segundo plano iniciada, continuando para o próximo grupo..."))
+                    elif protocol_data:
+                        q.put(("status", f"    ✅ Dados do protocolo: {protocol_data}"))
+                        q.put(("status", "    -> ⚠️ Atualização do SharePoint ignorada (drive_id/file_id não disponível)"))
                     else:
-                        q.put(("status", "    ⚠️ Failed to extract protocol"))
+                        q.put(("status", "    ⚠️ Falha ao extrair protocolo"))
                 
                 # Navigate back to order processing page
-                q.put(("status", "    -> Navigating back to order processing..."))
+                q.put(("status", "    -> Retornando ao processamento de pedidos..."))
                 page.locator("#iframe-servico").content_frame.get_by_role("button", name="Painel").click()
                 page.wait_for_timeout(2000)  # Wait for page to load
                 
@@ -528,28 +576,28 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
                 
                 frame.get_by_role("menuitem", name="CONSUMIR ITENS").click()
                 page.wait_for_timeout(2000)  # Wait for page to be ready for next group
-                q.put(("status", "    -> ✅ Ready for next group"))
+                q.put(("status", "    -> ✅ Pronto para o próximo grupo"))
                 
                 page.wait_for_timeout(1000)
             except TimeoutError:
-                q.put(("status", "    -> ℹ️ No explicit confirm button found (may auto-submit)"))
+                q.put(("status", "    -> ℹ️ Nenhum botão de confirmação explícito encontrado (pode enviar automaticamente)"))
             
             # Try to proceed to next step if available
             try:
                 data_button = frame.get_by_text("Data sugerida para entrega")
                 data_button.wait_for(state="visible", timeout=3000)
                 data_button.click()
-                q.put(("status", "    -> Proceeding to next step (Data sugerida)"))
+                q.put(("status", "    -> Prosseguindo para o próximo passo (Data sugerida)"))
             except TimeoutError:
-                q.put(("status", "    -> ℹ️ Next step not available yet"))
+                q.put(("status", "    -> ℹ️ Próximo passo ainda não disponível"))
             
-            q.put(("status", "    ✅ File upload process completed"))
+            q.put(("status", "    ✅ Processo de envio de arquivo concluído"))
             
         except TimeoutError as e:
-            q.put(("status", f"    ❌ Upload timeout: {e}"))
+            q.put(("status", f"    ❌ Tempo limite de envio excedido: {e}"))
             print(f"Upload timeout: {e}")
         except Exception as e:
-            q.put(("status", f"    ❌ Upload error: {e}"))
+            q.put(("status", f"    ❌ Erro no envio: {e}"))
             print(f"Upload error: {e}")
             import traceback
             traceback.print_exc()
@@ -612,7 +660,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
         
         # Log found columns for debugging
         print(f"Headers found: {headers}")
-        q.put(("status", f"    -> Excel columns found: {len(headers)} columns detected"))
+        q.put(("status", f"    -> Colunas do Excel encontradas: {len(headers)} colunas detectadas"))
         print(f"Column mapping: {col_mapping}")
         print(f"Items to match: {len(items)} items")
         
@@ -723,29 +771,29 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                     ws.range(row_num, col_mapping['observacao_fornecedor']).value = observacao_val
                     print(f"    -> Set Observação/Fornecedor: {observacao_val}")
                 
-                q.put(("status", f"    -> Row {row_num}: ✅ Filled all fields for {code_pedido}"))
+                q.put(("status", f"    -> Linha {row_num}: ✅ Todos os campos preenchidos para {code_pedido}"))
                 matched_count += 1
             else:
                 print(f"  ⚠️ No match found for: {code_pedido} - {code_produto}")
-                q.put(("status", f"    -> Row {row_num}: ⚠️ No match for {code_pedido}"))
+                q.put(("status", f"    -> Linha {row_num}: ⚠️ Nenhuma correspondência para {code_pedido}"))
             
             row_num += 1
         
         print(f"✅ Matched {matched_count} out of {len(items)} items")
-        q.put(("status", f"    -> Matched {matched_count} out of {len(items)} items"))
+        q.put(("status", f"    -> Correspondidos {matched_count} de {len(items)} itens"))
         
         # Save the modified workbook
         wb.save()
         wb.close()
         app.quit()
         
-        q.put(("status", f"    ✅ Excel file processed and saved"))
+        q.put(("status", f"    ✅ Arquivo Excel processado e salvo"))
         print(f"✅ Excel file processed and saved: {file_path}")
         return 'Done'
         
     except Exception as e:
         print(f"❌ Error processing Excel file: {e}")
-        q.put(("status", f"    ❌ Error processing Excel: {e}"))
+        q.put(("status", f"    ❌ Erro ao processar Excel: {e}"))
         import traceback
         traceback.print_exc()
 
@@ -758,27 +806,21 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
     """
     protocol = None
     
-    page.pause()
-    
     try:
         frame = page.locator("#iframe-servico").content_frame
         
-        page.pause()  # DEBUG: Pause to inspect the page state
-        
         # Expand the first log row - look for td with aria-label="Expandir"
-        q.put(("status", "    -> Expanding first log entry..."))
+        q.put(("status", "    -> Expandindo primeira entrada de log..."))
         
         # Find ONLY the first td element with aria-label="Expandir" and click its child div
         expand_td = frame.locator('td[aria-label="Expandir"]').first
         
         # Make sure we're clicking only the first one
-        q.put(("status", f"    -> Found {frame.locator('td[aria-label=\"Expandir\"]').count()} expandable rows"))
+        q.put(("status", f"    -> Encontradas {frame.locator('td[aria-label=\"Expandir\"]').count()} linhas expansíveis"))
         
         expand_td.locator("div").first.click()
         page.wait_for_timeout(1500)  # Wait for expansion
-        q.put(("status", "    -> Log entry expanded"))
-        
-        page.pause()  # DEBUG: Pause after expansion to see what happened
+        q.put(("status", "    -> Entrada de log expandida"))
         
         parent_row = expand_td.locator('xpath=ancestor::tr').first
         
@@ -790,7 +832,7 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
             
             if error_cells.count() > 0 and error_cells.first.is_visible():
                 error_text = error_cells.first.get_attribute("title") or error_cells.first.inner_text()
-                q.put(("status", f"    -> ❌ Upload status: Erro - {error_text}"))
+                q.put(("status", f"    -> ❌ Status do envio: Erro - {error_text}"))
                 # Store the error message as the protocol so we can send it to SharePoint
                 protocol = f"ERRO: {error_text}"
             else:
@@ -799,23 +841,23 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
                 
                 if demanda_cells.count() > 0 and demanda_cells.first.is_visible():
                     demanda_text = demanda_cells.first.get_attribute("title") or demanda_cells.first.inner_text()
-                    q.put(("status", f"    -> ✅ Upload status: Sucesso - {demanda_text}"))
+                    q.put(("status", f"    -> ✅ Status do envio: Sucesso - {demanda_text}"))
                     
                     # Extract protocol number using regex
                     import re
                     match = re.search(r'Demanda (\d+)', demanda_text)
                     if match:
                         protocol = match.group(1)
-                        q.put(("status", f"    -> ✅ Protocol extracted: {protocol}"))
+                        q.put(("status", f"    -> ✅ Protocolo extraído: {protocol}"))
                     else:
-                        q.put(("status", "    -> ⚠️ Could not parse protocol from message"))
+                        q.put(("status", "    -> ⚠️ Não foi possível analisar protocolo da mensagem"))
                         protocol = "ERRO: Could not parse protocol from Demanda message"
                 else:
-                    q.put(("status", "    -> ⚠️ No Demanda or Erro message found in expanded row"))
+                    q.put(("status", "    -> ⚠️ Nenhuma mensagem de Demanda ou Erro encontrada na linha expandida"))
                     protocol = "ERRO: No status message found"
                     
         except Exception as extract_err:
-            q.put(("status", f"    -> ⚠️ Error during message extraction: {extract_err}"))
+            q.put(("status", f"    -> ⚠️ Erro durante extração da mensagem: {extract_err}"))
             protocol = f"ERRO: Exception during extraction - {str(extract_err)}"
         
        
@@ -830,7 +872,7 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
        
             
     except Exception as e:
-        q.put(("status", f"    -> ❌ Protocol extraction error: {e}"))
+        q.put(("status", f"    -> ❌ Erro na extração do protocolo: {e}"))
         import traceback
         traceback.print_exc()
         
