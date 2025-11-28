@@ -78,58 +78,6 @@ def load_credentials():
     with open(cred_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
-
-# list of profile items we want to copy (small & useful)
-PROFILE_ITEMS = [
-    "Cookies",                 # cookies sqlite
-    "Preferences",             # prefs JSON
-    "Local State",             # local state
-    "Local Storage",           # local storage folder
-    "Network",                 # may contain network tokens (sometimes)
-    "Web Data",                # form data / autofill
-    "Login Data",              # saved logins (may be locked)
-    "Extensions",              # extensions (optional)
-    "IndexedDB",               # optional
-    "Service Worker",          # optional
-    "Session Storage"          # optional
-]
-
-def safe_copy(src_root: str, dst_root: str, items: list):
-    """
-    Copy only specific files/folders from src_root into dst_root safely,
-    skipping locked files and ignoring errors.
-    """
-    os.makedirs(dst_root, exist_ok=True)
-    for name in items:
-        src_path = os.path.join(src_root, name)
-        dst_path = os.path.join(dst_root, name)
-        try:
-            if os.path.isdir(src_path):
-                # copytree with ignore errors: walk and copy files individually
-                os.makedirs(dst_path, exist_ok=True)
-                for dirpath, dirnames, filenames in os.walk(src_path):
-                    rel = os.path.relpath(dirpath, src_path)
-                    target_dir = os.path.join(dst_path, rel) if rel != '.' else dst_path
-                    os.makedirs(target_dir, exist_ok=True)
-                    for fname in filenames:
-                        sfile = os.path.join(dirpath, fname)
-                        tfile = os.path.join(target_dir, fname)
-                        try:
-                            shutil.copy2(sfile, tfile)
-                        except Exception:
-                            # skip locked or unreadable files
-                            continue
-            elif os.path.isfile(src_path):
-                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-                try:
-                    shutil.copy2(src_path, dst_path)
-                except Exception:
-                    # skip locked files
-                    continue
-        except Exception:
-            continue
-
 def run_automation(playwright: Playwright, q: queue.Queue):
     try:
         q.put(("status", "Carregando credenciais..."))
@@ -140,47 +88,30 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         q.put(("status", "Iniciando navegador..."))
         q.put(("progress", 5))
 
-        # real Chrome profile (Default folder). No trailing space.
-        real_profile_root = r"C:\Users\perna\AppData\Local\Google\Chrome\User Data\Default"
-        if not os.path.exists(real_profile_root):
-            # Try without Default subfolder (some setups use "User Data" folder directly)
-            real_profile_root = r"C:\Users\perna\AppData\Local\Google\Chrome\User Data"
-            
-            
-            if not os.path.exists(real_profile_root):
-                raise FileNotFoundError(f"Chrome profile not found at expected locations.")
-
-        # Create a lightweight temp profile and copy only useful files (safe while Chrome is open)
+        # Create fresh temporary profile (works better with Cloudflare protection)
         temp_profile = tempfile.mkdtemp(prefix="chrome_profile_")
-        dst_profile = os.path.join(temp_profile, "Default")
-        os.makedirs(dst_profile, exist_ok=True)
-
-        q.put(("status", "Copiando arquivos do perfil (somente essenciais)..."))
+        q.put(("status", "Criando perfil temporário limpo..."))
         q.put(("progress", 8))
-        safe_copy(real_profile_root, dst_profile, PROFILE_ITEMS)
-
-        # Launch Chromium with the copied profile (uses Chrome user-data content)
-        # Note: Using playwright.chromium.launch_persistent_context on the browser-type
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir=temp_profile,
+        
+        browser = playwright.chromium.launch(
             headless=False,
             args=[
-                "--start-minimized",
+                "--start-maximized",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
             ],
-            ignore_default_args=["--enable-automation"],  # Remove automation flag from default args
         )
-
+        
+        context = browser.new_context(
+            no_viewport=True,  # Use full browser window size
+        )
+        
         page = context.new_page()
-        # small wait so profile files are loaded
         time.sleep(1)
 
 
-
-    
         # Order_datas_from_sharepoint(q)
         Login_and_Navigation(page, url, q, username, password)
 
@@ -190,12 +121,12 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         # import traceback; q.put(("status", traceback.format_exc()))
     finally:
         q.put(("status", "Fechando navegador..."))
-        if 'context' in locals():
+        if 'browser' in locals():
             try:
-                context.close()
+                browser.close()
             except Exception:
                 pass
-        # cleanup the temp profile folder
+        # cleanup the temp profile folder (if used)
         if 'temp_profile' in locals() and os.path.exists(temp_profile):
             try:
                 shutil.rmtree(temp_profile, ignore_errors=True)

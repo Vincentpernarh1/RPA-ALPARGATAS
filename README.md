@@ -212,6 +212,70 @@ python -c "import xlwings; print('✅ xlwings installed')"
 
 ---
 
+## 📦 Building Executable
+
+### Creating Standalone Executable with PyInstaller
+
+To distribute the application as a standalone executable without requiring Python installation:
+
+#### Prerequisites
+
+```powershell
+pip install pyinstaller
+```
+
+#### Build Command
+
+```powershell
+pyinstaller --noconfirm --onefile --windowed --noconsole --name "RPA Solicitar Pedidos" --icon "C:/Users/perna/Desktop/Barrueri/Alpargatas/Pedido-icon.ico" --add-data "C:\Users\perna\AppData\Local\ms-playwright\chromium-1187\chrome-win;ms-playwright\chromium-1187\chrome-win" main.py
+```
+
+#### Build Parameters Explained
+
+| Parameter | Purpose |
+|-----------|---------|
+| `--noconfirm` | Overwrite output directory without confirmation |
+| `--onefile` | Bundle everything into a single executable |
+| `--windowed` | GUI application (no console window) |
+| `--noconsole` | Suppress console window on startup |
+| `--name "RPA Solicitar Pedidos"` | Set executable name |
+| `--icon "Pedido-icon.ico"` | Application icon (must be .ico format) |
+| `--add-data` | Include Playwright Chromium binaries |
+
+#### Output Location
+
+```
+dist/
+└── RPA Solicitar Pedidos.exe    # Standalone executable
+```
+
+#### Important Notes
+
+- **Chromium Path**: Update the `--add-data` path to match your Playwright installation:
+  ```powershell
+  # Find your Chromium path:
+  python -c "from playwright.driver import compute_driver_executable; print(compute_driver_executable())"
+  ```
+
+- **File Dependencies**: Ensure these files are in the same directory as the executable:
+  - `credencial.json`
+  - `static_data.json`
+  - `.env` (if using Azure features)
+
+- **First Run**: The executable may take 10-20 seconds to start on first launch
+
+#### Distribution Checklist
+
+Before distributing the executable:
+
+1. ✅ Test on a clean Windows machine without Python
+2. ✅ Include `credencial.json` template (remove sensitive data)
+3. ✅ Include `static_data.json`
+4. ✅ Create `Dados/` and `Arquivos/` folders
+5. ✅ Provide user documentation for configuration
+
+---
+
 ## ⚙️ Configuration
 
 ### 1. Azure App Registration

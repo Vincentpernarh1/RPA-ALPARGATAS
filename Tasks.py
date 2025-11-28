@@ -86,8 +86,6 @@ def convert_excel_date(excel_value):
         if isinstance(excel_value, (int, float)):
             
             print(f"Converting Excel date serial: {excel_value}")
-            # Excel date serial number (days since 1899-12-30)
-            # Use 1899-12-30 as the base date (Excel's actual epoch)
             from datetime import datetime, timedelta
             excel_epoch = datetime(1899, 12, 30)
             result_date = excel_epoch + timedelta(days=excel_value)
@@ -120,8 +118,6 @@ def azure_main_in_thread(result_queue: queue.Queue):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Run the async main function and wait for its result
-        # The 'main()' function is the one imported from Azure_Access
         result = loop.run_until_complete(main()) 
         
         # Put the successful result into the queue
@@ -136,15 +132,7 @@ def azure_main_in_thread(result_queue: queue.Queue):
 
 # +++++++++ HELPER FUNCTION TO UPDATE SHAREPOINT PROTOCOL IN BACKGROUND +++++++++
 def update_sharepoint_protocol_in_thread(drive_id: str, file_id: str, protocol_data: dict, q: queue.Queue):
-    """
-    Run SharePoint protocol update in a background thread (non-blocking).
     
-    Args:
-        drive_id: SharePoint drive ID
-        file_id: Excel file ID
-        protocol_data: Dict with {chave, carro, protocol}
-        q: Queue for status updates
-    """
     try:
         # Create and set a new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -274,8 +262,6 @@ def Login_and_Navigation(page: Page, url, q, username, password):
 
     except Exception as e:
         q.put(("status", f"❌ Erro durante o login: {e}"))
-
-
 
 def process_orders(page: Page, q):
 
@@ -457,8 +443,8 @@ def process_orders(page: Page, q):
         q.put(("progress", 95))
 
         q.put(("status", "Finalizando..."))
-        if not_found_items:
-            q.put(("status", f"⚠️ Encontrados {len(not_found_items)} itens que não estavam no site:"))
+        # if not_found_items:
+        #     q.put(("status", f"⚠️ Encontrados {len(not_found_items)} itens que não estavam no site:"))
         
         q.put(("progress", 100))
            
@@ -467,17 +453,7 @@ def process_orders(page: Page, q):
 
 
 def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str = None, file_id: str = None):
-    """
-    Download Excel file, process it with xlwings, fill data from items,
-    save and prepare for upload to page.
     
-    Args:
-        page: Playwright Page object
-        items: List of items to process
-        q: Queue for status updates
-        drive_id: SharePoint drive ID (for background protocol update)
-        file_id: SharePoint Excel file ID (for background protocol update)
-    """
     page.locator("#iframe-servico").content_frame.get_by_role("button", name="DOWNLOAD PLANILHA").click()
 
     with page.expect_download() as download_info:
@@ -603,8 +579,6 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
             traceback.print_exc()
 
     time.sleep(2)
-
-
 
 
 def processar_excel_com_dados(file_path: str, items: list, q):
@@ -869,8 +843,7 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
             "protocol": protocol
         }
         
-       
-            
+        
     except Exception as e:
         q.put(("status", f"    -> ❌ Erro na extração do protocolo: {e}"))
         import traceback
