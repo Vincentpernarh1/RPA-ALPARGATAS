@@ -42,7 +42,7 @@ from msgraph.generated.drives.item.items.item.workbook.worksheets.item.used_rang
 
 
 
-from Azure_Access import main
+from Azure_Access import main,update_excel_rows
 
 base_path = os.getcwd()
 
@@ -144,7 +144,6 @@ def Order_datas_from_sharepoint(q):
     # Create and start the thread, targeting our new helper function
     azure_thread = threading.Thread(target=azure_main_in_thread, args=(result_queue,))
     azure_thread.start()
-    print(result_queue) 
     
     # Wait for the thread to finish its work
     azure_thread.join() # <--- You are here. The thread is finished.
@@ -159,12 +158,9 @@ def Order_datas_from_sharepoint(q):
         
         df, drive_id, file_id = result
         df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
-        # print(df.head(3))
-        
+      
         q.put(("status", "✅ Azure data fetched successfully."))
         
-        # 3. Return the values so the function that called 'teste_azure' can use them
-        print(df["PREVISÃO DE ENTREGA"].head(3))
         return df, drive_id, file_id
 
     except queue.Empty:
@@ -326,7 +322,7 @@ def process_orders(page: Page, q):
                 q.put(("status", f"    -> Found {total_carros} CARRO groups for {chave}"))
                 
                 for carro_index, (carro, carro_df) in enumerate(grouped_by_carro):
-                    q.put(("status", f"    --- Processing CARRO {carro_index + 1}/{total_carros}: {carro} for {chave} ---"))
+                    q.put(("status", f"    --- Processing {carro_index + 1}/{total_carros}: {carro} for {chave} ---"))
                     
                     found_items = []  # Reset for each CARRO group
                     
@@ -406,12 +402,11 @@ def process_orders(page: Page, q):
 
                     # --- Process and upload Excel file for this CARRO group ---
                     if found_items:
-                        q.put(("status", f"    -> Processing and uploading Excel file for {chave}-CARRO{carro}..."))
+                        q.put(("status", f"    -> Processing and uploading Excel file for {chave}-{carro}..."))
                         processar_e_Fazer_upload_Arquivos(page, found_items, q)
-                        q.put(("status", f"    ✅ Finished {chave}-CARRO{carro} (Group {carro_index + 1}/{total_carros})"))
+                        q.put(("status", f"    ✅ Finished {chave}-{carro} (Group {carro_index + 1}/{total_carros})"))
                     else:
-                        q.put(("status", f"    ⚠️ No items found for {chave}-CARRO{carro}. Skipping upload."))
-
+                        q.put(("status", f"    ⚠️ No items found for {chave}-{carro}. Skipping upload."))
                 q.put(("status", f"✅ Finished all CARROs for group: {chave}"))
                 
                 # Update progress at end of group
@@ -459,7 +454,8 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
     os.makedirs("Arquivos", exist_ok=True)
 
     # Save the downloaded file
-    save_path = f"Arquivos/{dt.datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    save_path = f"Arquivos/{dt.datetime.now().strftime('%d-%m-%Y')}.xlsx"
+    
     if os.path.exists(save_path):
         os.remove(save_path)
         q.put(("status", f"Existing file {save_path} removed."))
@@ -505,14 +501,34 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
                 confirm_button.click()
                 q.put(("status", "    -> Clicked confirm button"))
                 page.locator("#iframe-servico").content_frame.get_by_role("button", name="ir para a lista de logs").click()
-                page.pause()
+                page.wait_for_timeout(2000)  # Wait for logs page to load
+                q.put(("status", "    -> Navigated to logs page"))
 
-                # Extrair_logs_de_upload_e_Atualizar_sharepoint(page, q)
-
-                # page.locator("#iframe-servico").content_frame.get_by_role("row", name="Expandir 21/11/2025 12:26:").locator("div").first.click()
-                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Sucesso").click()
-                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Erro", exact=True).click()
-                # page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Erro ao gerar a demanda \"").click()
+                # Extract protocol and get chave/carro from first item
+                if items:
+                    chave = items[0].get('chave_pedido_loja', '')
+                    carro = items[0].get('carro', '')
+                    protocol_data = Extrair_logs_de_upload_e_Atualizar_sharepoint(page, chave, carro, q)
+                    
+                    if protocol_data:
+                        q.put(("status", f"    ✅ Protocol data: {protocol_data}"))
+                        # TODO: Store protocol_data for SharePoint update
+                    else:
+                        q.put(("status", "    ⚠️ Failed to extract protocol"))
+                
+                # Navigate back to order processing page
+                q.put(("status", "    -> Navigating back to order processing..."))
+                page.locator("#iframe-servico").content_frame.get_by_role("button", name="Painel").click()
+                page.wait_for_timeout(2000)  # Wait for page to load
+                
+                # Re-enter the order processing flow
+                frame = page.locator("#iframe-servico").content_frame
+                frame.get_by_role("button", name="AÇÕES").click()
+                page.wait_for_timeout(500)
+                
+                frame.get_by_role("menuitem", name="CONSUMIR ITENS").click()
+                page.wait_for_timeout(2000)  # Wait for page to be ready for next group
+                q.put(("status", "    -> ✅ Ready for next group"))
                 
                 page.wait_for_timeout(1000)
             except TimeoutError:
@@ -651,8 +667,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                     try:
                         from datetime import datetime, timedelta
                         if isinstance(data_val, (int, float)):
-                            # Already an Excel serial, convert back to date
-                            # Use 1899-12-30 as the base date (Excel's actual epoch)
+                            
                             excel_epoch = datetime(1899, 12, 30)
                             result_date = excel_epoch + timedelta(days=data_val)
                         else:
@@ -704,7 +719,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 if col_mapping['observacao_fornecedor']:
                     chave_val = matching_item.get('chave_pedido_loja')
                     carro_val = matching_item.get('carro', '')
-                    observacao_val = f"{chave_val}-CARRO{carro_val}" if carro_val else chave_val
+                    observacao_val = f"{chave_val}-{carro_val}" if carro_val else chave_val
                     ws.range(row_num, col_mapping['observacao_fornecedor']).value = observacao_val
                     print(f"    -> Set Observação/Fornecedor: {observacao_val}")
                 
@@ -736,9 +751,94 @@ def processar_excel_com_dados(file_path: str, items: list, q):
 
 
 
-# def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, q):
-#     print("Function 'Extrair_logs_de_upload_e_Atualizar_sharepoint' called.")
-
-
-
-
+def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro: str, q):
+    """
+    Extract protocol from upload logs and navigate back to order processing page.
+    Returns dict with {chave, carro, protocol} or None if extraction fails.
+    """
+    protocol = None
+    
+    page.pause()
+    
+    try:
+        frame = page.locator("#iframe-servico").content_frame
+        
+        page.pause()  # DEBUG: Pause to inspect the page state
+        
+        # Expand the first log row - look for td with aria-label="Expandir"
+        q.put(("status", "    -> Expanding first log entry..."))
+        
+        # Find ONLY the first td element with aria-label="Expandir" and click its child div
+        expand_td = frame.locator('td[aria-label="Expandir"]').first
+        
+        # Make sure we're clicking only the first one
+        q.put(("status", f"    -> Found {frame.locator('td[aria-label=\"Expandir\"]').count()} expandable rows"))
+        
+        expand_td.locator("div").first.click()
+        page.wait_for_timeout(1500)  # Wait for expansion
+        q.put(("status", "    -> Log entry expanded"))
+        
+        page.pause()  # DEBUG: Pause after expansion to see what happened
+        
+        parent_row = expand_td.locator('xpath=ancestor::tr').first
+        
+       
+        try:
+            # First, check if there's an error message
+            # Error would be in a gridcell with title containing "Erro ao gerar"
+            error_cells = frame.locator('td[role="gridcell"]').filter(has_text="Erro ao gerar")
+            
+            if error_cells.count() > 0 and error_cells.first.is_visible():
+                error_text = error_cells.first.get_attribute("title") or error_cells.first.inner_text()
+                q.put(("status", f"    -> ❌ Upload status: Erro - {error_text}"))
+                # Store the error message as the protocol so we can send it to SharePoint
+                protocol = f"ERRO: {error_text}"
+            else:
+                # No error found, look for "Demanda" message
+                demanda_cells = frame.locator('td[role="gridcell"]').filter(has_text="Demanda")
+                
+                if demanda_cells.count() > 0 and demanda_cells.first.is_visible():
+                    demanda_text = demanda_cells.first.get_attribute("title") or demanda_cells.first.inner_text()
+                    q.put(("status", f"    -> ✅ Upload status: Sucesso - {demanda_text}"))
+                    
+                    # Extract protocol number using regex
+                    import re
+                    match = re.search(r'Demanda (\d+)', demanda_text)
+                    if match:
+                        protocol = match.group(1)
+                        q.put(("status", f"    -> ✅ Protocol extracted: {protocol}"))
+                    else:
+                        q.put(("status", "    -> ⚠️ Could not parse protocol from message"))
+                        protocol = "ERRO: Could not parse protocol from Demanda message"
+                else:
+                    q.put(("status", "    -> ⚠️ No Demanda or Erro message found in expanded row"))
+                    protocol = "ERRO: No status message found"
+                    
+        except Exception as extract_err:
+            q.put(("status", f"    -> ⚠️ Error during message extraction: {extract_err}"))
+            protocol = f"ERRO: Exception during extraction - {str(extract_err)}"
+        
+       
+        
+        # Return data with protocol (which could be success protocol number or error message)
+        return {
+            "chave": chave,
+            "carro": carro,
+            "protocol": protocol
+        }
+        
+       
+            
+    except Exception as e:
+        q.put(("status", f"    -> ❌ Protocol extraction error: {e}"))
+        import traceback
+        traceback.print_exc()
+        
+        # Return error information even if extraction failed completely
+        return {
+            "chave": chave,
+            "carro": carro,
+            "protocol": f"ERRO: Critical failure - {str(e)}"
+        }
+    
+    

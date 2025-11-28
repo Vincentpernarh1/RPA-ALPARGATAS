@@ -171,6 +171,7 @@ def run_automation(playwright: Playwright, q: queue.Queue):
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
             ],
+            ignore_default_args=["--enable-automation"],  # Remove automation flag from default args
         )
 
         page = context.new_page()
