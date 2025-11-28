@@ -145,6 +145,8 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         if not os.path.exists(real_profile_root):
             # Try without Default subfolder (some setups use "User Data" folder directly)
             real_profile_root = r"C:\Users\perna\AppData\Local\Google\Chrome\User Data"
+            
+            
             if not os.path.exists(real_profile_root):
                 raise FileNotFoundError(f"Chrome profile not found at expected locations.")
 

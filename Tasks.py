@@ -84,12 +84,12 @@ def convert_excel_date(excel_value):
     """Convert Excel date serial number to DD/MM/YYYY format"""
     try:
         if isinstance(excel_value, (int, float)):
-            # Excel date serial number (days since 1900-01-01)
+            
+            print(f"Converting Excel date serial: {excel_value}")
+            # Excel date serial number (days since 1899-12-30)
+            # Use 1899-12-30 as the base date (Excel's actual epoch)
             from datetime import datetime, timedelta
-            excel_epoch = datetime(1900, 1, 1)
-            # Adjust for Excel's leap year bug (1900 is not a leap year)
-            if excel_value > 59:
-                excel_value -= 1
+            excel_epoch = datetime(1899, 12, 30)
             result_date = excel_epoch + timedelta(days=excel_value)
             return result_date.strftime('%d/%m/%Y')
         elif isinstance(excel_value, str):
@@ -107,6 +107,8 @@ def convert_excel_date(excel_value):
             return str(excel_value)
     except Exception as e:
         print(f"Error converting date {excel_value}: {e}")
+        
+        
         return str(excel_value)
     
 
@@ -162,6 +164,7 @@ def Order_datas_from_sharepoint(q):
         q.put(("status", "✅ Azure data fetched successfully."))
         
         # 3. Return the values so the function that called 'teste_azure' can use them
+        print(df["PREVISÃO DE ENTREGA"].head(3))
         return df, drive_id, file_id
 
     except queue.Empty:
@@ -267,13 +270,15 @@ def process_orders(page: Page, q):
         df['chave_pedido_loja'] = df['chave_pedido_loja'].astype(str)
 
         grouped_orders = df.groupby('chave_pedido_loja')
+        group_carro = df.groupby('CARRO')
+        
         total_groups = len(grouped_orders)
         total_items = len(df)
         q.put(("progress", 15))
         q.put(("status", f"Found {total_items} total items in {total_groups} unique groups."))
         
         frame_locator = page.locator("#iframe-servico").first.content_frame
-        found_items = []  # <- put this BEFORE the loop
+        
         # --- LOOP 1: By Unique 'chave_pedido_loja' ---
         for group_index, (chave, group_df) in enumerate(grouped_orders):
             
@@ -289,7 +294,6 @@ def process_orders(page: Page, q):
                 chave_input.fill(chave)
                 
                 page.wait_for_timeout(2000) # 2 seconds
-                # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
                 q.put(("status", "    -> Waiting for filter result..."))
                 
@@ -299,7 +303,7 @@ def process_orders(page: Page, q):
                 try:
                     # 1. Check for data (with a shorter timeout, as the page is stable)
                     data_locator.wait_for(state="visible", timeout=5000)
-                    q.put(("status", "    -> Data found. Proceeding to product loop."))
+                    q.put(("status", "    -> Data found. Proceeding to CARRO groups."))
 
                 except TimeoutError:
                     # 2. No data found. Check for "Sem dados"
@@ -316,79 +320,99 @@ def process_orders(page: Page, q):
                         q.put(("status", "    -> ERROR: No data row OR 'Sem dados' text found. Skipping group."))
                         continue 
 
-                # --- LOOP 2: By 'PRODUTO INTERNO CLIENTE' for this group ---
-                for _, row in group_df.iterrows():
-                    produto_interno_cliente = row['PRODUTO INTERNO CLIENTE']
-                    numero_cliente = row['Nº Pedido Cliente']
-                    data_deprevisao_de_entrega = row['PREVISÃO DE ENTREGA']
-
-                    if "TRADICIONAL" in row['Descrição'] :
-                        quantidade = (row['Qtd. Faturada']/24)
-                    else:
-                        quantidade = (row['Qtd. Faturada']/12)
+                # --- LOOP 2: Group by 'CARRO' within this chave_pedido_loja ---
+                grouped_by_carro = group_df.groupby('CARRO')
+                total_carros = len(grouped_by_carro)
+                q.put(("status", f"    -> Found {total_carros} CARRO groups for {chave}"))
                 
-                    q.put(("status", f"    -> Filtering for product: {produto_interno_cliente}"))
-                   
-                    product_filter_input = frame_locator.locator("input[aria-label='Filtro de célula']").nth(3)
-                                      
-                    product_filter_input.fill("")
-                    page.wait_for_timeout(300) # Short pause for clear
+                for carro_index, (carro, carro_df) in enumerate(grouped_by_carro):
+                    q.put(("status", f"    --- Processing CARRO {carro_index + 1}/{total_carros}: {carro} for {chave} ---"))
                     
-                    product_filter_input.fill(produto_interno_cliente)
+                    found_items = []  # Reset for each CARRO group
                     
-                    page.wait_for_timeout(1000) # 1 second
+                    # --- LOOP 3: By 'PRODUTO INTERNO CLIENTE' for this CARRO ---
+                    for _, row in carro_df.iterrows():
+                        produto_interno_cliente = row['PRODUTO INTERNO CLIENTE']
+                        numero_cliente = row['Nº Pedido Cliente']
+                        data_deprevisao_de_entrega = row['PREVISÃO DE ENTREGA']
 
-                    q.put(("status", "-> Waiting for product filter result..."))
-                    
-                    try:
-                        data_locator.wait_for(state="visible", timeout=4000)
-                        q.put(("status", "    -> Product found."))
-
-                        # Click all visible checkboxes for this product
-                        checkboxes = page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Selecionar linha").get_by_role("checkbox")
-                        checkbox_count = checkboxes.count()
-                        
-                        if checkbox_count > 0:
-                            for idx in range(checkbox_count):
-                                try:
-                                    checkboxes.nth(idx).click()
-                                    page.wait_for_timeout(100)  # Small delay between clicks
-                                except Exception as click_err:
-                                    q.put(("status", f"    -> Warning: Could not click checkbox {idx}: {click_err}"))
-                            q.put(("status", f"    -> Clicked {checkbox_count} checkboxes"))
+                        if "TRADICIONAL" in row['Descrição']:
+                            quantidade = (row['Qtd. Faturada']/24)
                         else:
-                            q.put(("status", "    -> ⚠️ No checkboxes found to select"))
-
-                        found_items.append({
-                                "numero_cliente": numero_cliente,
-                                "produto_interno_cliente": produto_interno_cliente,
-                                "quantidade": quantidade,
-                                "data_deprevisao_de_entrega": data_deprevisao_de_entrega,
-                                "caracteristica": static_data["caracteristica"],
-                                "caracteristica_do_veiculo": static_data["caracteristica_do_veiculo"],
-                                "chave_pedido_loja": chave  # Full key for Excel matching (Order#-Store#)
-                            })
+                            quantidade = (row['Qtd. Faturada']/12)
+                    
+                        q.put(("status", f"        -> Filtering for product: {produto_interno_cliente}"))
                        
+                        product_filter_input = frame_locator.locator("input[aria-label='Filtro de célula']").nth(3)
+                                          
+                        product_filter_input.fill("")
+                        page.wait_for_timeout(300) # Short pause for clear
+                        
+                        product_filter_input.fill(produto_interno_cliente)
+                        
                         page.wait_for_timeout(1000) # 1 second
 
-                    except TimeoutError:
-                        if sem_dados_locator.is_visible():
-                            q.put(("status", f"    -> 'Sem dados' for product {produto_interno_cliente}. Skipping item."))
-                            not_found_items.append({
-                                "chave": chave,
-                                "produto": produto_interno_cliente,
-                                "motivo": "Produto específico não encontrado"
-                            })
-                            continue
-                        else:
-                            q.put(("status", "    -> ERROR: No product row OR 'Sem dados' text found. Skipping item."))
-                            continue
+                        q.put(("status", "        -> Waiting for product filter result..."))
                         
-                    # --- Clear product filter ---
-                    product_filter_input.fill("")
-                    page.wait_for_timeout(200)
+                        try:
+                            data_locator.wait_for(state="visible", timeout=4000)
+                            q.put(("status", "        -> Product found."))
 
-                q.put(("status", f"✅ Finished group: {chave}"))
+                            # Click all visible checkboxes for this product
+                            checkboxes = page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Selecionar linha").get_by_role("checkbox")
+                            checkbox_count = checkboxes.count()
+                            
+                            if checkbox_count > 0:
+                                for idx in range(checkbox_count):
+                                    try:
+                                        checkboxes.nth(idx).click()
+                                        page.wait_for_timeout(100)  # Small delay between clicks
+                                    except Exception as click_err:
+                                        q.put(("status", f"        -> Warning: Could not click checkbox {idx}: {click_err}"))
+                                q.put(("status", f"        -> Clicked {checkbox_count} checkboxes"))
+                            else:
+                                q.put(("status", "        -> ⚠️ No checkboxes found to select"))
+
+                            found_items.append({
+                                    "numero_cliente": numero_cliente,
+                                    "produto_interno_cliente": produto_interno_cliente,
+                                    "quantidade": quantidade,
+                                    "data_deprevisao_de_entrega": data_deprevisao_de_entrega,
+                                    "caracteristica": static_data["caracteristica"],
+                                    "caracteristica_do_veiculo": static_data["caracteristica_do_veiculo"],
+                                    "chave_pedido_loja": chave,  # Full key for Excel matching (Order#-Store#)
+                                    "carro": carro  # Add CARRO identifier
+                                })
+                           
+                            page.wait_for_timeout(1000) # 1 second
+
+                        except TimeoutError:
+                            if sem_dados_locator.is_visible():
+                                q.put(("status", f"        -> 'Sem dados' for product {produto_interno_cliente}. Skipping item."))
+                                not_found_items.append({
+                                    "chave": chave,
+                                    "produto": produto_interno_cliente,
+                                    "carro": carro,
+                                    "motivo": "Produto específico não encontrado"
+                                })
+                                continue
+                            else:
+                                q.put(("status", "        -> ERROR: No product row OR 'Sem dados' text found. Skipping item."))
+                                continue
+                            
+                        # --- Clear product filter ---
+                        product_filter_input.fill("")
+                        page.wait_for_timeout(200)
+
+                    # --- Process and upload Excel file for this CARRO group ---
+                    if found_items:
+                        q.put(("status", f"    -> Processing and uploading Excel file for {chave}-CARRO{carro}..."))
+                        processar_e_Fazer_upload_Arquivos(page, found_items, q)
+                        q.put(("status", f"    ✅ Finished {chave}-CARRO{carro} (Group {carro_index + 1}/{total_carros})"))
+                    else:
+                        q.put(("status", f"    ⚠️ No items found for {chave}-CARRO{carro}. Skipping upload."))
+
+                q.put(("status", f"✅ Finished all CARROs for group: {chave}"))
                 
                 # Update progress at end of group
                 progress_per_group = 70 / total_groups if total_groups > 0 else 0
@@ -397,7 +421,7 @@ def process_orders(page: Page, q):
 
                 # --- Clear main 'chave' search ---
                 chave_input.fill("")
-                page.wait_for_timeout(500) 
+                page.wait_for_timeout(500)
 
             except Exception as e:
                 q.put(("status", f"❌ Error on group {chave}: {e}. Skipping to next group."))
@@ -407,10 +431,6 @@ def process_orders(page: Page, q):
                     q.put(("status", f"    -> Failed to clear input: {e_clear}"))
 
         q.put(("status", "🎉 All order groups processed successfully."))
-        q.put(("progress", 85))
-        
-        q.put(("status", "Processing and uploading Excel file..."))
-        processar_e_Fazer_upload_Arquivos(page, found_items, q)
         q.put(("progress", 95))
 
         q.put(("status", "Finalizing..."))
@@ -466,8 +486,6 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q):
             q.put(("status", "    -> Waiting for upload dialog..."))
             page.wait_for_timeout(1000)
             
-            # Find the hidden file input element in the iframe
-            # Look for input[type="file"] anywhere in the iframe
             frame = page.locator("#iframe-servico").content_frame
             file_input = frame.locator("input[type='file']")
             
@@ -530,7 +548,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
    
     try:
         # Open the workbook with xlwings
-        app = xw.App(visible=True, add_book=False)
+        app = xw.App(visible=False, add_book=False)
         app.display_alerts = False
         app.screen_updating = True
         wb = app.books.open(file_path,update_links=False, read_only=False)
@@ -627,14 +645,15 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 # Fill Data sugerida de entrega (convert to Excel date format)
                 if col_mapping['data_sugerida']:
                     data_val = matching_item.get('data_deprevisao_de_entrega')
+                    
+                    print(f"    -> Raw Data sugerida: {data_val}")
                     # Convert to datetime and set as date format
                     try:
                         from datetime import datetime, timedelta
                         if isinstance(data_val, (int, float)):
                             # Already an Excel serial, convert back to date
-                            excel_epoch = datetime(1900, 1, 1)
-                            if data_val > 59:
-                                data_val -= 1
+                            # Use 1899-12-30 as the base date (Excel's actual epoch)
+                            excel_epoch = datetime(1899, 12, 30)
                             result_date = excel_epoch + timedelta(days=data_val)
                         else:
                             # Parse string date
@@ -648,12 +667,14 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                             if result_date is None:
                                 raise ValueError(f"Could not parse date: {data_val}")
                         
-                        # Set the cell value as a date (Excel will format it)
+                        
+                        print("result_date : ",result_date  , "After transformation : ", result_date.strftime('%m-%d-%Y'))
+                        
+                        # Set the cell value as a string in YYYY-DD-MM format
                         cell = ws.range(row_num, col_mapping['data_sugerida'])
-                        cell.value = result_date.date()  # Use .date() to ensure it's a date object
-                        # Format the cell as date (DD/MM/YYYY) - use xlwings format
-                        cell.number_format =  "dd/mm/aaaa"
-                        print(f"    -> Set Data sugerida: {result_date.strftime('%d/%m/%Y')} (as date)")
+                        cell.value = result_date.strftime('%m-%d-%Y')  # Store as string in YYYY-MM-DD format
+                        
+                        print(f"    -> Set Data sugerida: {result_date.strftime('%Y-%m-%d')} (as string)")
                     except Exception as date_err:
                         # Fallback: set as string
                         ws.range(row_num, col_mapping['data_sugerida']).value = convert_excel_date(data_val)
@@ -671,15 +692,19 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                     ws.range(row_num, col_mapping['caracteristica_carga']).value = carga_val
                     print(f"    -> Set Característica da carga: {carga_val}")
                 
-                # Fill Demanda with chave_pedido_loja
+                # Fill Demanda with chave_pedido_loja-CARRO
                 if col_mapping['demanda']:
-                    demanda_val = matching_item.get('chave_pedido_loja')
+                    chave_val = matching_item.get('chave_pedido_loja')
+                    carro_val = matching_item.get('carro', '')
+                    demanda_val = f"{chave_val}-{carro_val}" if carro_val else chave_val
                     ws.range(row_num, col_mapping['demanda']).value = demanda_val
                     print(f"    -> Set Demanda: {demanda_val}")
                 
-                # Fill Observação/ Fornecedor with chave_pedido_loja
+                # Fill Observação/ Fornecedor with chave_pedido_loja-CARRO
                 if col_mapping['observacao_fornecedor']:
-                    observacao_val = matching_item.get('chave_pedido_loja')
+                    chave_val = matching_item.get('chave_pedido_loja')
+                    carro_val = matching_item.get('carro', '')
+                    observacao_val = f"{chave_val}-CARRO{carro_val}" if carro_val else chave_val
                     ws.range(row_num, col_mapping['observacao_fornecedor']).value = observacao_val
                     print(f"    -> Set Observação/Fornecedor: {observacao_val}")
                 
