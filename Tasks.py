@@ -173,8 +173,10 @@ def Order_datas_from_sharepoint(q):
             raise result # Re-raise the error
         
         df, drive_id, file_id = result
+        # df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
+        
         df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
-      
+
         q.put(("status", "✅ Dados do Azure obtidos com sucesso."))
         
         return df, drive_id, file_id
@@ -278,166 +280,189 @@ def process_orders(page: Page, q):
 
         df['PRODUTO INTERNO CLIENTE'] = df['PRODUTO INTERNO CLIENTE'].astype(str)
         df['chave_pedido_loja'] = df['chave_pedido_loja'].astype(str)
-
-        grouped_orders = df.groupby('chave_pedido_loja')
-        group_carro = df.groupby('CARRO')
         
-        total_groups = len(grouped_orders)
+        # Extract loja (store) from CÓD LOJA column (before the dash)
+        df['loja'] = df['CÓD LOJA'].astype(str).str.split('-').str[0]
+        
+        # Group by loja first
+        grouped_by_loja = df.groupby('loja')
+        
+        total_lojas = len(grouped_by_loja)
         total_items = len(df)
         q.put(("progress", 15))
-        q.put(("status", f"Encontrados {total_items} itens no total em {total_groups} grupos únicos."))
+        q.put(("status", f"Encontrados {total_items} itens no total em {total_lojas} lojas únicas."))
         
         frame_locator = page.locator("#iframe-servico").first.content_frame
         
-        # --- LOOP 1: By Unique 'chave_pedido_loja' ---
-        for group_index, (chave, group_df) in enumerate(grouped_orders):
+        # --- LOOP 1: By Unique 'loja' (Store) ---
+        loja_index = 0
+        for loja, loja_df in grouped_by_loja:
+            q.put(("status", f"=== Processando Loja {loja_index + 1}/{total_lojas}: {loja} ==="))
             
-            q.put(("status", f"--- Processando Grupo {group_index + 1}/{total_groups}: {chave} ---"))
+            # Within each loja, group by chave_pedido_loja
+            grouped_orders = loja_df.groupby('chave_pedido_loja')
+            total_groups = len(grouped_orders)
+            q.put(("status", f"    Encontrados {total_groups} grupos chave_pedido_loja para loja {loja}"))
             
-            # Calculate progress: 15% (initial) + 70% (processing) = 85% max before upload
-            progress_per_group = 70 / total_groups if total_groups > 0 else 0
-            current_progress = 15 + (group_index * progress_per_group)
-            q.put(("progress", int(current_progress)))
-            
-            try:
-                chave_input = frame_locator.locator(".dx-texteditor-input").first
-                chave_input.fill(chave)
+            # --- LOOP 2: By Unique 'chave_pedido_loja' within this loja ---
+            for group_index, (chave, group_df) in enumerate(grouped_orders):
                 
-                page.wait_for_timeout(2000) # 2 seconds
-
-                q.put(("status", "    -> Aguardando resultado do filtro..."))
+                q.put(("status", f"    --- Processando Grupo {group_index + 1}/{total_groups}: {chave} ---"))
                 
-                data_locator = frame_locator.locator(".dx-row.dx-data-row > td:nth-child(8)").first
-                sem_dados_locator = frame_locator.get_by_text("Sem dados")
-
+                # Calculate progress: 15% (initial) + 70% (processing) = 85% max before upload
+                # Calculate across all lojas
+                total_processed = loja_index * len(grouped_by_loja) + group_index
+                total_all_groups = sum(len(loja_df.groupby('chave_pedido_loja')) for _, loja_df in grouped_by_loja)
+                progress_per_group = 70 / total_all_groups if total_all_groups > 0 else 0
+                current_progress = 15 + (total_processed * progress_per_group)
+                q.put(("progress", int(current_progress)))
+                
                 try:
-                    # 1. Check for data (with a shorter timeout, as the page is stable)
-                    data_locator.wait_for(state="visible", timeout=5000)
-                    q.put(("status", "    -> Dados encontrados. Prosseguindo para grupos CARRO."))
-
-                except TimeoutError:
-                    # 2. No data found. Check for "Sem dados"
-                    if sem_dados_locator.is_visible():
-                        q.put(("status", "    -> 'Sem dados' encontrado para este grupo. Pulando."))
-                        for _, row in group_df.iterrows():
-                            not_found_items.append({
-                                "chave": chave,
-                                "produto": row['PRODUTO INTERNO CLIENTE'],
-                                "motivo": "Chave principal não encontrada"
-                            })
-                        continue 
-                    else:
-                        q.put(("status", "    -> ERRO: Nenhuma linha de dados OU texto 'Sem dados' encontrado. Pulando grupo."))
-                        continue 
-
-                # --- LOOP 2: Group by 'CARRO' within this chave_pedido_loja ---
-                grouped_by_carro = group_df.groupby('CARRO')
-                total_carros = len(grouped_by_carro)
-                q.put(("status", f"    -> Encontrados {total_carros} grupos CARRO para {chave}"))
-                
-                for carro_index, (carro, carro_df) in enumerate(grouped_by_carro):
-                    q.put(("status", f"    --- Processando {carro_index + 1}/{total_carros}: {carro} para {chave} ---"))
+                    chave_input = frame_locator.locator(".dx-texteditor-input").first
+                    chave_input.fill(chave)
                     
-                    found_items = []  # Reset for each CARRO group
+                    page.wait_for_timeout(2000) # 2 seconds
+
+                    q.put(("status", "        -> Aguardando resultado do filtro..."))
                     
-                    # --- LOOP 3: By 'PRODUTO INTERNO CLIENTE' for this CARRO ---
-                    for _, row in carro_df.iterrows():
-                        produto_interno_cliente = row['PRODUTO INTERNO CLIENTE']
-                        numero_cliente = row['Nº Pedido Cliente']
-                        data_deprevisao_de_entrega = row['PREVISÃO DE ENTREGA']
+                    data_locator = frame_locator.locator(".dx-row.dx-data-row > td:nth-child(8)").first
+                    sem_dados_locator = frame_locator.get_by_text("Sem dados")
 
-                        if "TRADICIONAL" in row['Descrição']:
-                            quantidade = (row['Qtd. Faturada']/24)
-                        else:
-                            quantidade = (row['Qtd. Faturada']/12)
-                    
-                        q.put(("status", f"        -> Filtrando produto: {produto_interno_cliente}"))
-                       
-                        product_filter_input = frame_locator.locator("input[aria-label='Filtro de célula']").nth(3)
-                                          
-                        product_filter_input.fill("")
-                        page.wait_for_timeout(300) # Short pause for clear
-                        
-                        product_filter_input.fill(produto_interno_cliente)
-                        
-                        page.wait_for_timeout(1000) # 1 second
+                    try:
+                        # 1. Check for data (with a shorter timeout, as the page is stable)
+                        data_locator.wait_for(state="visible", timeout=5000)
+                        q.put(("status", "        -> Dados encontrados. Prosseguindo para grupos CARRO."))
 
-                        q.put(("status", "        -> Aguardando resultado do filtro de produto..."))
-                        
-                        try:
-                            data_locator.wait_for(state="visible", timeout=4000)
-                            q.put(("status", "        -> Produto encontrado."))
-
-                            # Click all visible checkboxes for this product
-                            checkboxes = page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Selecionar linha").get_by_role("checkbox")
-                            checkbox_count = checkboxes.count()
-                            
-                            if checkbox_count > 0:
-                                for idx in range(checkbox_count):
-                                    try:
-                                        checkboxes.nth(idx).click()
-                                        page.wait_for_timeout(100)  # Small delay between clicks
-                                    except Exception as click_err:
-                                        q.put(("status", f"        -> Aviso: Não foi possível clicar na checkbox {idx}: {click_err}"))
-                                q.put(("status", f"        -> Clicado em {checkbox_count} checkboxes"))
-                            else:
-                                q.put(("status", "        -> ⚠️ Nenhuma checkbox encontrada para selecionar"))
-
-                            found_items.append({
-                                    "numero_cliente": numero_cliente,
-                                    "produto_interno_cliente": produto_interno_cliente,
-                                    "quantidade": quantidade,
-                                    "data_deprevisao_de_entrega": data_deprevisao_de_entrega,
-                                    "caracteristica": static_data["caracteristica"],
-                                    "caracteristica_do_veiculo": static_data["caracteristica_do_veiculo"],
-                                    "chave_pedido_loja": chave,  # Full key for Excel matching (Order#-Store#)
-                                    "carro": carro  # Add CARRO identifier
-                                })
-                           
-                            page.wait_for_timeout(1000) # 1 second
-
-                        except TimeoutError:
-                            if sem_dados_locator.is_visible():
-                                q.put(("status", f"        -> 'Sem dados' para produto {produto_interno_cliente}. Pulando item."))
+                    except TimeoutError:
+                        # 2. No data found. Check for "Sem dados"
+                        if sem_dados_locator.is_visible():
+                            q.put(("status", "        -> 'Sem dados' encontrado para este grupo. Pulando."))
+                            for _, row in group_df.iterrows():
                                 not_found_items.append({
                                     "chave": chave,
-                                    "produto": produto_interno_cliente,
-                                    "carro": carro,
-                                    "motivo": "Produto específico não encontrado"
+                                    "produto": row['PRODUTO INTERNO CLIENTE'],
+                                    "motivo": "Chave principal não encontrada"
                                 })
-                                continue
+                            continue 
+                        else:
+                            q.put(("status", "        -> ERRO: Nenhuma linha de dados OU texto 'Sem dados' encontrado. Pulando grupo."))
+                            continue 
+
+                    # --- LOOP 3: Group by 'CARRO' within this chave_pedido_loja ---
+                    grouped_by_carro = group_df.groupby('CARRO')
+                    total_carros = len(grouped_by_carro)
+                    q.put(("status", f"        -> Encontrados {total_carros} grupos CARRO para {chave}"))
+                    
+                    for carro_index, (carro, carro_df) in enumerate(grouped_by_carro):
+                        q.put(("status", f"        --- Processando {carro_index + 1}/{total_carros}: {carro} para {chave} ---"))
+                        
+                        found_items = []  # Reset for each CARRO group
+                        
+                        # --- LOOP 4: By 'PRODUTO INTERNO CLIENTE' for this CARRO ---
+                        for _, row in carro_df.iterrows():
+                            produto_interno_cliente = row['PRODUTO INTERNO CLIENTE']
+                            numero_cliente = row['Nº Pedido Cliente']
+                            data_deprevisao_de_entrega = row['PREVISÃO DE ENTREGA']
+
+                            if "TRADICIONAL" in row['Descrição']:
+                                quantidade = (row['Qtd. Faturada']/24)
                             else:
-                                q.put(("status", "        -> ERRO: Nenhuma linha de produto OU texto 'Sem dados' encontrado. Pulando item."))
-                                continue
+                                quantidade = (row['Qtd. Faturada']/12)
+                        
+                            q.put(("status", f"            -> Filtrando produto: {produto_interno_cliente}"))
+                           
+                            product_filter_input = frame_locator.locator("input[aria-label='Filtro de célula']").nth(3)
+                                              
+                            product_filter_input.fill("")
+                            page.wait_for_timeout(300) # Short pause for clear
                             
-                        # --- Clear product filter ---
-                        product_filter_input.fill("")
-                        page.wait_for_timeout(200)
+                            product_filter_input.fill(produto_interno_cliente)
+                            
+                            page.wait_for_timeout(1000) # 1 second
 
-                    # --- Process and upload Excel file for this CARRO group ---
-                    if found_items:
-                        q.put(("status", f"    -> Processando e enviando arquivo Excel para {chave}-{carro}..."))
-                        processar_e_Fazer_upload_Arquivos(page, found_items, q, drive_id, file_id)
-                        q.put(("status", f"    ✅ Finalizado {chave}-{carro} (Grupo {carro_index + 1}/{total_carros})"))
-                    else:
-                        q.put(("status", f"    ⚠️ Nenhum item encontrado para {chave}-{carro}. Pulando envio."))
-                q.put(("status", f"✅ Finalizados todos os CARROs para o grupo: {chave}"))
-                
-                # Update progress at end of group
-                progress_per_group = 70 / total_groups if total_groups > 0 else 0
-                completed_progress = 15 + ((group_index + 1) * progress_per_group)
-                q.put(("progress", int(completed_progress)))
+                            q.put(("status", "            -> Aguardando resultado do filtro de produto..."))
+                            
+                            try:
+                                data_locator.wait_for(state="visible", timeout=4000)
+                                q.put(("status", "            -> Produto encontrado."))
 
-                # --- Clear main 'chave' search ---
-                chave_input.fill("")
-                page.wait_for_timeout(500)
+                                # Click all visible checkboxes for this product
+                                checkboxes = page.locator("#iframe-servico").content_frame.get_by_role("gridcell", name="Selecionar linha").get_by_role("checkbox")
+                                checkbox_count = checkboxes.count()
+                                
+                                if checkbox_count > 0:
+                                    for idx in range(checkbox_count):
+                                        try:
+                                            checkboxes.nth(idx).click()
+                                            page.wait_for_timeout(100)  # Small delay between clicks
+                                        except Exception as click_err:
+                                            q.put(("status", f"            -> Aviso: Não foi possível clicar na checkbox {idx}: {click_err}"))
+                                    q.put(("status", f"            -> Clicado em {checkbox_count} checkboxes"))
+                                else:
+                                    q.put(("status", "            -> ⚠️ Nenhuma checkbox encontrada para selecionar"))
 
-            except Exception as e:
-                q.put(("status", f"❌ Erro no grupo {chave}: {e}. Pulando para o próximo grupo."))
-                try:
-                    frame_locator.locator(".dx-texteditor-input").first.fill("")
-                except Exception as e_clear:
-                    q.put(("status", f"    -> Falha ao limpar campo: {e_clear}"))
+                                found_items.append({
+                                        "numero_cliente": numero_cliente,
+                                        "produto_interno_cliente": produto_interno_cliente,
+                                        "quantidade": quantidade,
+                                        "data_deprevisao_de_entrega": data_deprevisao_de_entrega,
+                                        "caracteristica": static_data["caracteristica"],
+                                        "caracteristica_do_veiculo": static_data["caracteristica_do_veiculo"],
+                                        "chave_pedido_loja": chave,  # Full key for Excel matching (Order#-Store#)
+                                        "carro": carro  # Add CARRO identifier
+                                    })
+                               
+                                page.wait_for_timeout(1000) # 1 second
+
+                            except TimeoutError:
+                                if sem_dados_locator.is_visible():
+                                    q.put(("status", f"            -> 'Sem dados' para produto {produto_interno_cliente}. Pulando item."))
+                                    not_found_items.append({
+                                        "chave": chave,
+                                        "produto": produto_interno_cliente,
+                                        "carro": carro,
+                                        "motivo": "Produto específico não encontrado"
+                                    })
+                                    continue
+                                else:
+                                    q.put(("status", "            -> ERRO: Nenhuma linha de produto OU texto 'Sem dados' encontrado. Pulando item."))
+                                    continue
+                                
+                            # --- Clear product filter ---
+                            product_filter_input.fill("")
+                            page.wait_for_timeout(200)
+
+                        # --- Process and upload Excel file for this CARRO group ---
+                        if found_items:
+                            q.put(("status", f"        -> Processando e enviando arquivo Excel para {chave}-{carro}..."))
+                            processar_e_Fazer_upload_Arquivos(page, found_items, q, drive_id, file_id)
+                            q.put(("status", f"        ✅ Finalizado {chave}-{carro} (Grupo {carro_index + 1}/{total_carros})"))
+                        else:
+                            q.put(("status", f"        ⚠️ Nenhum item encontrado para {chave}-{carro}. Pulando envio."))
+                    
+                    q.put(("status", f"    ✅ Finalizados todos os CARROs para o grupo: {chave}"))
+                    
+                    # Update progress at end of chave group
+                    total_processed = loja_index * len(grouped_by_loja) + group_index + 1
+                    total_all_groups = sum(len(loja_df.groupby('chave_pedido_loja')) for _, loja_df in grouped_by_loja)
+                    progress_per_group = 70 / total_all_groups if total_all_groups > 0 else 0
+                    completed_progress = 15 + (total_processed * progress_per_group)
+                    q.put(("progress", int(completed_progress)))
+
+                    # --- Clear main 'chave' search ---
+                    chave_input.fill("")
+                    page.wait_for_timeout(500)
+
+                except Exception as e:
+                    q.put(("status", f"❌ Erro no grupo {chave}: {e}. Pulando para o próximo grupo."))
+                    try:
+                        frame_locator.locator(".dx-texteditor-input").first.fill("")
+                    except Exception as e_clear:
+                        q.put(("status", f"    -> Falha ao limpar campo: {e_clear}"))
+            
+            # Increment loja index after processing all chave groups for this loja
+            loja_index += 1
+            q.put(("status", f"=== ✅ Finalizada Loja: {loja} ==="))
 
         q.put(("status", "🎉 Todos os grupos de pedidos processados com sucesso."))
         q.put(("progress", 95))
