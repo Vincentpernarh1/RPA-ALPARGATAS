@@ -47,7 +47,7 @@ def get_playwright_browser_path():
 
 
 # --- GUI UPDATE FUNCTION ---
-def update_gui(queue_instance, status_label, progress_bar, log_text):
+def update_gui(queue_instance, status_label, progress_bar, log_text, process_button=None):
     """Checks the queue for messages from the worker thread and updates the GUI."""
     try:
         while True:
@@ -59,12 +59,14 @@ def update_gui(queue_instance, status_label, progress_bar, log_text):
             elif message_type == "progress":
                 progress_bar['value'] = value
             elif message_type == "done":
-                status_label.config(text="Processo Concluído!")
+                status_label.config(text="Processo Concluído! Clique em 'Processar' para executar novamente.")
                 progress_bar['value'] = 100
+                if process_button:
+                    process_button.config(state="normal")  # Re-enable the button
                 return # Stop checking
     except queue.Empty:
         pass
-    status_label.after(100, lambda: update_gui(queue_instance, status_label, progress_bar, log_text))
+    status_label.after(100, lambda: update_gui(queue_instance, status_label, progress_bar, log_text, process_button))
 
 
 def load_credentials():
@@ -253,8 +255,8 @@ class App:
         self.thread.daemon = True
         self.thread.start()
         
-        # Start checking the queue for updates
-        update_gui(self.queue, self.status_label, self.progress_bar, self.log_text)
+        # Start checking the queue for updates (pass button reference to re-enable it)
+        update_gui(self.queue, self.status_label, self.progress_bar, self.log_text, self.process_button)
 
 if __name__ == "__main__":
     root = tk.Tk()
