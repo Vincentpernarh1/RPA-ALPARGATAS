@@ -528,7 +528,7 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
             # Set the file directly to the input element
             file_input.set_input_files(save_path)
             q.put(("status", f"    -> ✅ Arquivo enviado: {os.path.basename(save_path)}"))
-            page.wait_for_timeout(2000)  # Wait for upload to process
+            page.wait_for_timeout(3000)  # Wait for upload to process
             
             # Look for a confirm/submit button after upload
             try:
@@ -537,7 +537,7 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
                 confirm_button.click()
                 q.put(("status", "    -> Clicado no botão confirmar"))
                 page.locator("#iframe-servico").content_frame.get_by_role("button", name="ir para a lista de logs").click()
-                page.wait_for_timeout(2000)  # Wait for logs page to load
+                page.wait_for_timeout(6000)  # Wait for logs page to load
                 q.put(("status", "    -> Navegado para página de logs"))
 
                 # Extract protocol and get chave/carro from first item

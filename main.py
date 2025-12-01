@@ -95,20 +95,39 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         q.put(("status", "Criando perfil temporário limpo..."))
         q.put(("progress", 8))
         
-        browser = playwright.chromium.launch(
+        
+        chromium_path = get_playwright_browser_path()
+        
+        if chromium_path:
+            browser = playwright.chromium.launch(
             headless=False,
+            executable_path=chromium_path,
             args=[
                 "--start-maximized",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-            ],
-        )
+            ]
+                )
+            
+        else : 
+            browser = playwright.chromium.launch(
+                headless=False,
+                args=[
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ],
+            )
         
         context = browser.new_context(
             no_viewport=True,  # Use full browser window size
         )
+        
+        
         
         page = context.new_page()
         time.sleep(1)
@@ -140,7 +159,6 @@ def main_process(q: queue.Queue):
     with sync_playwright() as playwright:
         # for i in range(0,3):
         run_automation(playwright, q)
-
 
 
 
