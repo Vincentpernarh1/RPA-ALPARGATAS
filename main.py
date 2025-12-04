@@ -19,6 +19,7 @@ import time
 from datetime import date, timedelta
 
 from Tasks import Login_and_Navigation ,Order_datas_from_sharepoint
+from Pega_retorno_cliente import run_retorno_automation
 
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -161,6 +162,12 @@ def main_process(q: queue.Queue):
         run_automation(playwright, q)
 
 
+def retorno_process(q: queue.Queue):
+    """Process for Pegar Retorno - fetches client responses and updates SharePoint"""
+    with sync_playwright() as playwright:
+        run_retorno_automation(playwright, q)
+
+
 
 # --- TKINTER APP SETUP ---
 class App:
@@ -229,6 +236,9 @@ class App:
         self.process_button = ttk.Button(button_frame, text="▶ Processar", command=self.start_processing_thread, style='TButton')
         self.process_button.pack(side=tk.LEFT, padx=5)
         
+        self.retorno_button = ttk.Button(button_frame, text="📥 Pegar Retorno", command=self.start_retorno_thread, style='TButton')
+        self.retorno_button.pack(side=tk.RIGHT, padx=5)
+        
         # Log section with accent
         log_frame = ttk.LabelFrame(main_frame, text="📋 Log de Atividades", padding="13")
         log_frame.pack(pady=0, padx=2, fill=tk.BOTH, expand=True)
@@ -275,6 +285,20 @@ class App:
         
         # Start checking the queue for updates (pass button reference to re-enable it)
         update_gui(self.queue, self.status_label, self.progress_bar, self.log_text, self.process_button)
+    
+    def start_retorno_thread(self):
+        """Start the Pegar Retorno process in a separate thread"""
+        self.retorno_button.config(state="disabled")
+        self.progress_bar['value'] = 0
+        self.log_text.delete('1.0', tk.END)
+        self.status_label.config(text="Iniciando processo de Pegar Retorno...")
+        
+        self.retorno_thread = threading.Thread(target=retorno_process, args=(self.queue,))
+        self.retorno_thread.daemon = True
+        self.retorno_thread.start()
+        
+        # Start checking the queue for updates (pass button reference to re-enable it)
+        update_gui(self.queue, self.status_label, self.progress_bar, self.log_text, self.retorno_button)
 
 if __name__ == "__main__":
     root = tk.Tk()

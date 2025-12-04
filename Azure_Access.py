@@ -272,6 +272,146 @@ async def update_excel_rows(graph_client: GraphServiceClient, drive_id: str, fil
     await update_protocol_rows(graph_client, drive_id, file_id, protocol_data)
 
 
+# ---------------- UPDATE RESPONSE ROWS (NEW FOR PEGAR RETORNO) ----------------
+async def update_response_rows(graph_client: GraphServiceClient, drive_id: str, file_id: str, response_data_list: list[dict]):
+    """
+    Updates the 'Retorno Cliente' or 'Resposta' column in SharePoint Excel with fetched responses.
+    
+    Args:
+        graph_client: Microsoft Graph client instance
+        drive_id: SharePoint drive ID
+        file_id: Excel file ID
+        response_data_list: List of dicts with structure:
+            [{"chave": "12345-67", "protocol": "P001", "response": "Aprovado"}, ...]
+    
+    Matching logic:
+        - Matches rows where chave_pedido_loja == chave AND protocol == protocol
+        - Updates the response column with the fetched response text
+    """
+    try:
+        print("\n🔄 Starting response update process...")
+        print(f"  - Processing {len(response_data_list)} response updates")
+
+        worksheets = await graph_client.drives.by_drive_id(drive_id).items.by_drive_item_id(file_id).workbook.worksheets.get()
+        if not worksheets or not worksheets.value:
+            print("❌ No worksheets found.")
+            return
+
+        first_worksheet = worksheets.value[0]
+        print(f"  - Target worksheet: {first_worksheet.name}")
+
+        used_range = await graph_client.drives.by_drive_id(drive_id) \
+            .items.by_drive_item_id(file_id) \
+            .workbook.worksheets.by_workbook_worksheet_id(first_worksheet.id) \
+            .used_range.get()
+
+        if "values" not in used_range.additional_data:
+            print("❌ No data found to update.")
+            return
+
+        if not used_range.address:
+            print("❌ Could not determine range address for update.")
+            return
+
+        values = used_range.additional_data["values"]
+        header, data = values[0], values[1:]
+
+        # Find column indices
+        col_indices = {}
+        for idx, col_name in enumerate(header):
+            col_name_lower = str(col_name).lower().strip() if col_name else ""
+            if 'nº pedido cliente' in col_name_lower or 'pedido cliente' in col_name_lower:
+                col_indices['pedido_cliente'] = idx
+            elif 'cód loja' in col_name_lower or 'cod loja' in col_name_lower:
+                col_indices['cod_loja'] = idx
+            elif 'protocolo' in col_name_lower and 'solicitação' in col_name_lower:
+                col_indices['protocolo'] = idx
+            elif 'status ajustado' in col_name_lower:
+                col_indices['resposta'] = idx
+        
+        print(f"  - Found column indices: {col_indices}")
+        
+        # Verify required columns exist
+        required_cols = ['pedido_cliente', 'cod_loja', 'protocolo', 'resposta']
+        missing_cols = [col for col in required_cols if col not in col_indices]
+        if missing_cols:
+            print(f"❌ Missing required columns: {missing_cols}")
+            return
+        
+        # Update matching rows
+        updated_count = 0
+        for row in data:
+            if len(row) <= max(col_indices.values()):
+                # Extend row if needed
+                row.extend([""] * (max(col_indices.values()) + 1 - len(row)))
+            
+            # Build chave_pedido_loja from row data
+            pedido_val = str(row[col_indices['pedido_cliente']]).strip() if row[col_indices['pedido_cliente']] else ""
+            loja_val = str(row[col_indices['cod_loja']]).strip() if row[col_indices['cod_loja']] else ""
+            protocol_val = str(row[col_indices['protocolo']]).strip() if row[col_indices['protocolo']] else ""
+            
+            # Extract first part of loja (before '-')
+            loja_first_part = loja_val.split('-')[0] if loja_val else ""
+            row_chave = f"{pedido_val}-{loja_first_part}" if pedido_val and loja_first_part else ""
+            
+            # Check if this row matches any response data
+            for response_item in response_data_list:
+                item_chave = str(response_item.get('chave', '')).strip()
+                item_protocol = str(response_item.get('protocol', '')).strip()
+                item_response = str(response_item.get('response', '')).strip()
+                
+                if row_chave == item_chave and protocol_val == item_protocol:
+                    # Update response column
+                    row[col_indices['resposta']] = item_response
+                    updated_count += 1
+                    print(f"  - Updated row: {row_chave} / {item_protocol} -> Response: {item_response}")
+                    break
+
+        updated_values = [header] + data
+        print(f"  - Prepared {updated_count} response updates to send...")
+
+        if updated_count == 0:
+            print("  - No matching rows found to update.")
+            return
+
+        # === Direct REST call using same credentials ===
+        credential = ClientSecretCredential(
+            tenant_id=os.getenv("TENANT_ID"),
+            client_id=os.getenv("CLIENT_ID"),
+            client_secret=os.getenv("CLIENT_SECRET")
+        )
+        token_response = await credential.get_token("https://graph.microsoft.com/.default")
+        token = token_response.token
+        
+        target_address = used_range.address
+        print(f"  - Updating range: {target_address}")
+
+        endpoint = (
+            f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{file_id}"
+            f"/workbook/worksheets/{first_worksheet.id}/range(address='{target_address}')"
+        )
+
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"values": updated_values},
+            ) as resp:
+                if resp.status == 200:
+                    print(f"✅ Successfully updated {updated_count} response rows in Excel.")
+                else:
+                    text = await resp.text()
+                    print(f"❌ Response update failed ({resp.status}): {text}")
+
+    except Exception as ex:
+        print(f"❌ Unexpected error during response update: {ex}")
+        import traceback
+        traceback.print_exc()
+
+
 
 
 
@@ -292,6 +432,27 @@ async def update_protocol_async(drive_id: str, file_id: str, protocol_data_list:
         print("✅ Protocol update completed successfully")
     except Exception as e:
         print(f"❌ Protocol update failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# ---------------- ASYNC WRAPPER FOR RESPONSE UPDATE ----------------
+async def update_response_async(drive_id: str, file_id: str, response_data_list: list[dict]):
+    """
+    Async wrapper to update client responses in SharePoint Excel.
+    Can be called from a background thread.
+    
+    Args:
+        drive_id: SharePoint drive ID
+        file_id: Excel file ID
+        response_data_list: List of dicts with {chave, protocol, response}
+    """
+    graph_client = get_graph_client()
+    try:
+        await update_response_rows(graph_client, drive_id, file_id, response_data_list)
+        print("✅ Response update completed successfully")
+    except Exception as e:
+        print(f"❌ Response update failed: {e}")
         import traceback
         traceback.print_exc()
 
