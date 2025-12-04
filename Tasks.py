@@ -322,8 +322,6 @@ def process_orders(page: Page, q):
                     chave_input.fill(chave)
                     
                     page.wait_for_timeout(2000) # 2 seconds
-
-                    q.put(("status", "        -> Aguardando resultado do filtro..."))
                     
                     data_locator = frame_locator.locator(".dx-row.dx-data-row > td:nth-child(8)").first
                     sem_dados_locator = frame_locator.get_by_text("Sem dados")
@@ -379,8 +377,6 @@ def process_orders(page: Page, q):
                             product_filter_input.fill(produto_interno_cliente)
                             
                             page.wait_for_timeout(1000) # 1 second
-
-                            q.put(("status", "            -> Aguardando resultado do filtro de produto..."))
                             
                             try:
                                 data_locator.wait_for(state="visible", timeout=4000)
@@ -391,13 +387,44 @@ def process_orders(page: Page, q):
                                 checkbox_count = checkboxes.count()
                                 
                                 if checkbox_count > 0:
+                                    successful_clicks = 0
                                     for idx in range(checkbox_count):
-                                        try:
-                                            checkboxes.nth(idx).click()
-                                            page.wait_for_timeout(100)  # Small delay between clicks
-                                        except Exception as click_err:
-                                            q.put(("status", f"            -> Aviso: Não foi possível clicar na checkbox {idx}: {click_err}"))
-                                    q.put(("status", f"            -> Clicado em {checkbox_count} checkboxes"))
+                                        checkbox = checkboxes.nth(idx)
+                                        clicked = False
+                                        
+                                        # Try up to 2 times
+                                        for attempt in range(2):
+                                            try:
+                                                # Wait for checkbox to be visible and actionable
+                                                checkbox.wait_for(state="visible", timeout=2000)
+                                                
+                                                # Ensure it's in viewport and clickable
+                                                checkbox.scroll_into_view_if_needed()
+                                                
+                                                # Click only if actionable
+                                                checkbox.click(timeout=1500)
+                                                successful_clicks += 1
+                                                clicked = True
+                                                page.wait_for_timeout(100)
+                                                break  # Success - exit retry loop
+                                                
+                                            except TimeoutError:
+                                                # Element not visible/actionable within timeout
+                                                if attempt == 1:  # Last attempt failed
+                                                    break  # Break from retry loop, move to next checkbox
+                                                page.wait_for_timeout(300)  # Brief wait before retry
+                                                
+                                            except Exception as click_err:
+                                                # Other error occurred
+                                                if attempt == 1:  # Last attempt failed
+                                                    break
+                                                page.wait_for_timeout(300)
+                                        
+                                        # If both attempts failed, break from main checkbox loop
+                                        if not clicked and idx > 0:  # Allow first checkbox to fail, but break if subsequent ones fail
+                                            break
+                                    
+                                    q.put(("status", f"            -> Clicado em {successful_clicks} checkboxes"))
                                 else:
                                     q.put(("status", "            -> ⚠️ Nenhuma checkbox encontrada para selecionar"))
 
@@ -780,6 +807,31 @@ def processar_excel_com_dados(file_path: str, items: list, q):
         
         print(f"✅ Matched {matched_count} out of {len(items)} items")
         q.put(("status", f"    -> Correspondidos {matched_count} de {len(items)} itens"))
+        
+        # Delete rows that don't have matches (in reverse to avoid index shifting)
+        rows_to_delete = []
+        check_row = 4
+        while True:
+            code_pedido = ws.range(check_row, col_mapping['codigo_pedido']).value if col_mapping['codigo_pedido'] else None
+            code_produto = ws.range(check_row, col_mapping['codigo_produto']).value if col_mapping['codigo_produto'] else None
+            
+            if not code_pedido or not code_produto:
+                break
+            
+            # Check if this row was matched by looking for filled quantidade_entrega
+            quantidade_filled = ws.range(check_row, col_mapping['quantidade_entrega']).value if col_mapping['quantidade_entrega'] else None
+            
+            if quantidade_filled is None:  # Not matched
+                rows_to_delete.append(check_row)
+            
+            check_row += 1
+        
+        # Delete in reverse order
+        if rows_to_delete:
+            for row_to_delete in reversed(rows_to_delete):
+                ws.range(f"{row_to_delete}:{row_to_delete}").delete()
+            
+            q.put(("status", f"    -> Removidas {len(rows_to_delete)} linhas não correspondentes"))
         
         # Save the modified workbook
         wb.save()
