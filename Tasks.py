@@ -309,6 +309,20 @@ def process_orders(page: Page, q):
                 
                 q.put(("status", f"    --- Processando Grupo {group_index + 1}/{total_groups}: {chave} ---"))
                 
+                # Check if protocol column indicates processing is needed (error or null)
+                agenda_cols = ['PROTOCOLO DA SOLICITAÇÃO']
+                needs_processing = False
+                
+                for _, row in group_df.iterrows():
+                    protocol_val = str(row.get('PROTOCOLO DA SOLICITAÇÃO', '')).strip()
+                    if pd.isna(row.get('PROTOCOLO DA SOLICITAÇÃO')) or protocol_val == '' or 'ERRO' in protocol_val.upper() or 'Erro ao gerar a demanda' in protocol_val:
+                        needs_processing = True
+                        break
+                
+                if not needs_processing:
+                    q.put(("status", f"    --- Grupo {chave} já possui protocolo válido. Pulando. ---"))
+                    continue  # Skip to next group
+                
                 # Calculate progress: 15% (initial) + 70% (processing) = 85% max before upload
                 # Calculate across all lojas
                 total_processed = loja_index * len(grouped_by_loja) + group_index
@@ -635,7 +649,6 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
 
 def processar_excel_com_dados(file_path: str, items: list, q):
    
-   
     try:
         # Open the workbook with xlwings
         app = xw.App(visible=False, add_book=False)
@@ -756,14 +769,9 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                             if result_date is None:
                                 raise ValueError(f"Could not parse date: {data_val}")
                         
-                        
-                        print("result_date : ",result_date  , "After transformation : ", result_date.strftime('%m-%d-%Y'))
-                        
-                        # Set the cell value as a string in YYYY-DD-MM format
                         cell = ws.range(row_num, col_mapping['data_sugerida'])
                         cell.value = result_date.strftime('%m-%d-%Y')  # Store as string in YYYY-MM-DD format
                         
-                        print(f"    -> Set Data sugerida: {result_date.strftime('%Y-%m-%d')} (as string)")
                     except Exception as date_err:
                         # Fallback: set as string
                         ws.range(row_num, col_mapping['data_sugerida']).value = convert_excel_date(data_val)

@@ -45,6 +45,8 @@ The application features a modern **Tkinter GUI** with real-time progress tracki
 - ✅ **SharePoint Integration**: Secure OAuth authentication with Microsoft Graph API
 - ✅ **Intelligent Order Grouping**: Groups orders by `chave_pedido_loja` (Order#-Store#)
 - ✅ **Web Automation**: Playwright-based browser automation with human-like behavior
+- ✅ **Response Data Retrieval**: Extracts client responses and schedule details from Trizy platform
+- ✅ **Multi-Column Excel Updates**: Updates AGENDA CONFIRMADA, PROTOCOLO AGENDA, HORÁRIO columns
 - ✅ **Excel Processing**: Automated reading, writing, and formatting with xlwings
 - ✅ **Real-time GUI**: Progress tracking, status updates, and activity logging
 - ✅ **Error Handling**: Comprehensive exception handling with detailed logging
@@ -116,8 +118,9 @@ The application features a modern **Tkinter GUI** with real-time progress tracki
 │  │  - Convert to pandas DataFrame                     │    │
 │  └────────────────────────────────────────────────────┘    │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │  update_excel_rows() [Future Implementation]      │    │
-│  │  - Batch update Excel cells via REST API          │    │
+│  │  update_agenda_columns()                           │    │
+│  │  - Update AGENDA CONFIRMADA, PROTOCOLO AGENDA,    │    │
+│  │    HORÁRIO columns via REST API                    │    │
 │  └────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -132,6 +135,7 @@ RPA-ALPARGATAS/
 ├── main.py                    # GUI orchestrator & browser initialization
 ├── Tasks.py                   # Business logic & web automation
 ├── Azure_Access.py            # Microsoft Graph API integration
+├── Pega_retorno_cliente.py    # Response data extraction & Excel updates
 │
 ├── credencial.json            # Trizy platform credentials
 ├── static_data.json           # Static shipping configuration
@@ -882,6 +886,48 @@ q.put(("status", "User-facing message"))  # Internal comment
 
 ---
 
+## 📋 Version History
+
+### Version 2.0 - Pega Retorno Implementation (December 2025)
+
+**New Features:**
+- ✅ **Response Data Extraction**: Automated extraction of client responses from Trizy platform
+- ✅ **Multi-Column Excel Updates**: Updates three specific columns in SharePoint Excel:
+  - `AGENDA CONFIRMADA` (BG): Confirmed schedule date
+  - `PROTOCOLO AGENDA` (BH): Schedule protocol number (numeric only)
+  - `HORÁRIO` (BI): Schedule time
+- ✅ **Enhanced Data Validation**: Only updates rows with complete extracted data
+- ✅ **Improved Error Handling**: Skips incomplete records and logs warnings
+
+**Technical Changes:**
+- **New Function**: `update_agenda_columns()` in `Azure_Access.py` for targeted column updates
+- **Data Parsing**: Extracts numeric values from "AgendamentoXXXXX" format
+- **Thread Safety**: Maintains async operations for SharePoint updates
+- **File**: `Pega_retorno_cliente.py` - Dedicated module for response retrieval automation
+
+**Workflow Enhancement:**
+```
+Web Search → Data Extraction → Validation → Excel Update
+     ↓              ↓              ↓           ↓
+ Protocol → Demand Number → Date/Time → AGENDA CONFIRMADA
+   Search    (40975254)     (12/08/25)     PROTOCOLO AGENDA
+                                      → HORÁRIO (14:30)
+```
+
+**Breaking Changes:**
+- Replaced single "response" column update with multi-column approach
+- Requires Excel file to have `AGENDA CONFIRMADA`, `PROTOCOLO AGENDA`, `HORÁRIO` columns
+
+### Version 1.0 - Initial Release (November 2025)
+
+**Core Features:**
+- SharePoint Excel data retrieval
+- Trizy platform web automation
+- Order processing and file upload
+- Tkinter GUI with progress tracking
+
+---
+
 ## 👥 Contributors
 
 **Developer**: Vincent Pernarh  
@@ -907,5 +953,5 @@ For issues or questions:
 
 ---
 
-**Last Updated**: November 25, 2025  
-**Version**: 1.0 (Pre-SharePoint Update Patch)
+**Last Updated**: December 8, 2025  
+**Version**: 2.0 (Pega Retorno Implementation)

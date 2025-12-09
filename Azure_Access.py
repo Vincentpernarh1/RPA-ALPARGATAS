@@ -180,7 +180,7 @@ async def update_protocol_rows(graph_client: GraphServiceClient, drive_id: str, 
             elif 'protocolo' in col_name_lower and 'solicitação' in col_name_lower:
                 col_indices['protocolo'] = idx
         
-        print(f"  - Found column indices: {col_indices}")
+        # print(f"  - Found column indices: {col_indices}")
         
         # Verify required columns exist
         required_cols = ['pedido_cliente', 'cod_loja', 'carro', 'protocolo']
@@ -272,25 +272,25 @@ async def update_excel_rows(graph_client: GraphServiceClient, drive_id: str, fil
     await update_protocol_rows(graph_client, drive_id, file_id, protocol_data)
 
 
-# ---------------- UPDATE RESPONSE ROWS (NEW FOR PEGAR RETORNO) ----------------
-async def update_response_rows(graph_client: GraphServiceClient, drive_id: str, file_id: str, response_data_list: list[dict]):
+# ---------------- UPDATE AGENDA COLUMNS (NEW FOR PEGAR RETORNO) ----------------
+async def update_agenda_columns(graph_client: GraphServiceClient, drive_id: str, file_id: str, agenda_data_list: list[dict]):
     """
-    Updates the 'Retorno Cliente' or 'Resposta' column in SharePoint Excel with fetched responses.
+    Updates the 'AGENDA CONFIRMADA', 'PROTOCOLO AGENDA', and 'HORÁRIO' columns in SharePoint Excel with extracted data.
     
     Args:
         graph_client: Microsoft Graph client instance
         drive_id: SharePoint drive ID
         file_id: Excel file ID
-        response_data_list: List of dicts with structure:
-            [{"chave": "12345-67", "protocol": "P001", "response": "Aprovado"}, ...]
+        agenda_data_list: List of dicts with structure:
+            [{"chave": "12345-67", "protocol": "P001", "agenda_confirmada": "12/08/2025", "protocolo_agenda": "Agendamento12345", "horario": "14:30"}, ...]
     
     Matching logic:
         - Matches rows where chave_pedido_loja == chave AND protocol == protocol
-        - Updates the response column with the fetched response text
+        - Updates the respective columns with the provided values
     """
     try:
-        print("\n🔄 Starting response update process...")
-        print(f"  - Processing {len(response_data_list)} response updates")
+        print("\n🔄 Starting agenda columns update process...")
+        print(f"  - Processing {len(agenda_data_list)} agenda updates")
 
         worksheets = await graph_client.drives.by_drive_id(drive_id).items.by_drive_item_id(file_id).workbook.worksheets.get()
         if not worksheets or not worksheets.value:
@@ -326,13 +326,17 @@ async def update_response_rows(graph_client: GraphServiceClient, drive_id: str, 
                 col_indices['cod_loja'] = idx
             elif 'protocolo' in col_name_lower and 'solicitação' in col_name_lower:
                 col_indices['protocolo'] = idx
-            elif 'status ajustado' in col_name_lower:
-                col_indices['resposta'] = idx
+            elif 'agenda confirmada' in col_name_lower:
+                col_indices['agenda_confirmada'] = idx
+            elif 'protocolo agenda' in col_name_lower:
+                col_indices['protocolo_agenda'] = idx
+            elif 'horário' in col_name_lower or 'horario' in col_name_lower:
+                col_indices['horario'] = idx
         
-        print(f"  - Found column indices: {col_indices}")
+        # print(f"  - Found column indices: {col_indices}")
         
         # Verify required columns exist
-        required_cols = ['pedido_cliente', 'cod_loja', 'protocolo', 'resposta']
+        required_cols = ['pedido_cliente', 'cod_loja', 'protocolo', 'agenda_confirmada', 'protocolo_agenda', 'horario']
         missing_cols = [col for col in required_cols if col not in col_indices]
         if missing_cols:
             print(f"❌ Missing required columns: {missing_cols}")
@@ -354,21 +358,25 @@ async def update_response_rows(graph_client: GraphServiceClient, drive_id: str, 
             loja_first_part = loja_val.split('-')[0] if loja_val else ""
             row_chave = f"{pedido_val}-{loja_first_part}" if pedido_val and loja_first_part else ""
             
-            # Check if this row matches any response data
-            for response_item in response_data_list:
-                item_chave = str(response_item.get('chave', '')).strip()
-                item_protocol = str(response_item.get('protocol', '')).strip()
-                item_response = str(response_item.get('response', '')).strip()
+            # Check if this row matches any agenda data
+            for agenda_item in agenda_data_list:
+                item_chave = str(agenda_item.get('chave', '')).strip()
+                item_protocol = str(agenda_item.get('protocol', '')).strip()
+                item_agenda_confirmada = str(agenda_item.get('agenda_confirmada', '')).strip()
+                item_protocolo_agenda = str(agenda_item.get('protocolo_agenda', '')).strip()
+                item_horario = str(agenda_item.get('horario', '')).strip()
                 
                 if row_chave == item_chave and protocol_val == item_protocol:
-                    # Update response column
-                    row[col_indices['resposta']] = item_response
+                    # Update the three columns
+                    row[col_indices['agenda_confirmada']] = item_agenda_confirmada
+                    row[col_indices['protocolo_agenda']] = item_protocolo_agenda
+                    row[col_indices['horario']] = item_horario
                     updated_count += 1
-                    print(f"  - Updated row: {row_chave} / {item_protocol} -> Response: {item_response}")
+                    # print(f"  - Updated row: {row_chave} / {item_protocol} -> Agenda Confirmada: {item_agenda_confirmada}, Protocolo Agenda: {item_protocolo_agenda}, Horário: {item_horario}")
                     break
 
         updated_values = [header] + data
-        print(f"  - Prepared {updated_count} response updates to send...")
+        print(f"  - Prepared {updated_count} agenda updates to send...")
 
         if updated_count == 0:
             print("  - No matching rows found to update.")
@@ -401,17 +409,15 @@ async def update_response_rows(graph_client: GraphServiceClient, drive_id: str, 
                 json={"values": updated_values},
             ) as resp:
                 if resp.status == 200:
-                    print(f"✅ Successfully updated {updated_count} response rows in Excel.")
+                    print(f"✅ Successfully updated {updated_count} agenda columns in Excel.")
                 else:
                     text = await resp.text()
-                    print(f"❌ Response update failed ({resp.status}): {text}")
+                    print(f"❌ Agenda update failed ({resp.status}): {text}")
 
     except Exception as ex:
-        print(f"❌ Unexpected error during response update: {ex}")
+        print(f"❌ Unexpected error during agenda update: {ex}")
         import traceback
         traceback.print_exc()
-
-
 
 
 
@@ -436,23 +442,23 @@ async def update_protocol_async(drive_id: str, file_id: str, protocol_data_list:
         traceback.print_exc()
 
 
-# ---------------- ASYNC WRAPPER FOR RESPONSE UPDATE ----------------
-async def update_response_async(drive_id: str, file_id: str, response_data_list: list[dict]):
+# ---------------- ASYNC WRAPPER FOR AGENDA UPDATE ----------------
+async def update_agenda_async(drive_id: str, file_id: str, agenda_data_list: list[dict]):
     """
-    Async wrapper to update client responses in SharePoint Excel.
+    Async wrapper to update agenda columns in SharePoint Excel.
     Can be called from a background thread.
     
     Args:
         drive_id: SharePoint drive ID
         file_id: Excel file ID
-        response_data_list: List of dicts with {chave, protocol, response}
+        agenda_data_list: List of dicts with {chave, protocol, agenda_confirmada, protocolo_agenda, horario}
     """
     graph_client = get_graph_client()
     try:
-        await update_response_rows(graph_client, drive_id, file_id, response_data_list)
-        print("✅ Response update completed successfully")
+        await update_agenda_columns(graph_client, drive_id, file_id, agenda_data_list)
+        print("✅ Agenda update completed successfully")
     except Exception as e:
-        print(f"❌ Response update failed: {e}")
+        print(f"❌ Agenda update failed: {e}")
         import traceback
         traceback.print_exc()
 

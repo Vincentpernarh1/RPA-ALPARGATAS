@@ -43,7 +43,7 @@ from msgraph.generated.drives.item.items.item.workbook.worksheets.item.used_rang
 
 
 
-from Azure_Access import main, update_excel_rows, update_protocol_async, update_response_async
+from Azure_Access import main, update_excel_rows, update_protocol_async, update_agenda_async
 
 base_path = os.getcwd()
 
@@ -190,10 +190,17 @@ def Login_and_Navigation(page: Page, url, q, username, password):
         
         q.put(("status", "✅ Login realizado com sucesso"))
         q.put(("progress", 10))
-        
-        # Pause here for manual navigation definition
-        q.put(("status", "⏸️ Pausado para definição manual de navegação..."))
-        page.pause()
+       
+        try:
+            page.get_by_role("button", name="Demandas Gestão e controle de")
+            q.put(("status", "✅ Login realizado com sucesso"))
+            q.put(("progress", 5))
+        except TimeoutError:
+            q.put(("status", "⚠️ Tentativa de login falhou "))
+            page.screenshot(path="login_failed.png")
+      
+        page.get_by_role("button", name="Demandas Gestão e controle de").click()
+       
 
     except Exception as e:
         q.put(("status", f"❌ Erro durante o login: {e}"))
@@ -213,7 +220,7 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
         
         q.put(("status", f"Encontrados {len(unique_groups)} grupos únicos para processar"))
         
-        response_data_list = []
+        agenda_data_list = []
         not_found_protocols = []
         
         total_groups = len(unique_groups)
@@ -221,6 +228,25 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
         for idx, row in unique_groups.iterrows():
             try:
                 chave = row['chave_pedido_loja']
+                
+                # Check if agenda columns are already filled for this group
+                agenda_cols = ['AGENDA CONFIRMADA', 'PROTOCOLO AGENDA', 'HORÁRIO']
+                group_filled = True
+                
+                # Get all rows for this chave to check if agenda is filled
+                group_rows = df[df['chave_pedido_loja'] == chave]
+                for _, group_row in group_rows.iterrows():
+                    for col in agenda_cols:
+                        if pd.isna(group_row.get(col)) or str(group_row.get(col)).strip() == '':
+                            group_filled = False
+                            break
+                    if not group_filled:
+                        break
+                
+                if group_filled:
+                    q.put(("status", f"Grupo {chave} já processado (agenda preenchida). Pulando."))
+                    continue  # Skip to next group
+                
                 protocol = str(row.get('PROTOCOLO DA SOLICITAÇÃO', '')).strip()
                 
                 # Skip if protocol is empty, None, NaN, or contains error messages
@@ -232,25 +258,99 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 progress_value = 15 + int((idx / total_groups) * 70)
                 q.put(("progress", progress_value))
                 
-                # ============================================
-                # TODO: Add web search logic here
-                # Example structure:
-                # 1. Navigate to search page (if needed)
-                # 2. Fill search input with protocol
-                # 3. Submit search
-                # 4. Extract response text from results
-                # ============================================
+                page.get_by_role("textbox", name="Buscar demandas...").fill(protocol)
+                               
+                page.get_by_role("link", name=f"Demanda #{protocol}").click()
+                page.get_by_role("button", name="Histórico").click()
+               
+                # Check if "Recebimento - Aprovada" is present
+                try:
+                    # page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first.wait_for(state="visible", timeout=5000)
+                    expect(page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first).to_be_visible(timeout=5000)
+                except TimeoutError:
+                    q.put(("status", f"⚠️ Protocolo {protocol} não está aprovado ou elemento não encontrado. Pulando..."))
+                    continue
+            
+            
+                # Proceed to open the response list (class=rs-list) and click the first item
+                try:
+                    page.locator(".history-item-container").first.click()
+                    human_like_delay(0.2, 0.5)
+                except Exception as e:
+                    q.put(("status", f"❌ Não foi possível abrir detalhes da demanda para protocolo {protocol}: {e}"))
+                    not_found_protocols.append(chave)
+                    continue
+
+                # Extract demand number and date/time using partial text/regex
+                try:
+                    # Define a locator for the visible details panel.
+                    details_panel = page.locator("div[id^='panel-']:has-text('Data efetiva entrega'):visible")
+                    
+                    # Ensure panel is ready before proceeding
+                    details_panel.wait_for(timeout=5000)
+
+                    # --- Extract demand number (scoped to the panel) ---
+                    demand_number = None
+                    demand_candidates = details_panel.locator("text=/Agendamento\\d{5,}/").all_text_contents()
+                    if demand_candidates:
+                        demand_number = demand_candidates[0]
+                    else:
+                        # Fallback
+                        demand_candidates = details_panel.locator("text=Agendamento").all_text_contents()
+                        if demand_candidates:
+                            demand_number = demand_candidates[0]
+
+                    # --- Extract date and time (from parent container) ---
+                    date_text = None
+                    date_time = None
+                    datetime_pattern = re.compile(r"(\d{2}/\d{2}/\d{4})[\s\S]*?(\d{2}:\d{2})")
+                    
+                    # Find the parent container of the "Data efetiva entrega" label.
+                    # This is more robust if the date is in a sibling element.
+                    date_container = details_panel.locator("text=/Data efetiva entrega.*/").first.locator("..")
+                    
+                    # Get text from that container and parse it
+                    full_date_text = date_container.text_content()
+                    
+                    date_text_parts = full_date_text.split('\n')
+                    if date_text_parts:
+                        date_text = date_text_parts[0].strip()
+
+                    datetime_match = datetime_pattern.search(full_date_text)
+                    if datetime_match:
+                        date_value = datetime_match.group(1)
+                        time_value = datetime_match.group(2)
+                        date_time = f"{date_value} {time_value}"
+                        
+                        print("date Value here : ",date_value,"Time Value : ", time_value)
+                    else:
+                        date_value = ""
+                        time_value = ""
+                except Exception as e:
+                    demand_number = ""
+                    date_value = ""
+                    time_value = ""
+                    q.put(("status", f"⚠️ Falha ao extrair detalhes para protocolo {protocol}: {e}"))
+
+                # Parse demand_number to extract only the number part (remove "Agendamento" prefix)
+                if demand_number and demand_number.startswith("Agendamento"):
+                    demand_number = demand_number.replace("Agendamento", "").strip()
+
+                # Only append if all required values are present and not empty
+                if date_value and demand_number and time_value:
+                    agenda_data_list.append({
+                        "chave": chave,
+                        "protocol": protocol,
+                        "agenda_confirmada": date_value,
+                        "protocolo_agenda": demand_number,
+                        "horario": time_value
+                    })
+
+                    q.put(("status", f"✅ Dados extraídos para {chave}: Agenda={date_value}, Protocolo Agenda={demand_number}, Horário={time_value}"))
+                else:
+                    q.put(("status", f"⚠️ Dados incompletos para {chave}, pulando atualização"))
+                    not_found_protocols.append(chave)
                 
-                # Placeholder - will be implemented after page.pause()
-                response_text = "Pendente Implementação"  # Replace with actual search result
-                
-                response_data_list.append({
-                    "chave": chave,
-                    "protocol": protocol,
-                    "response": response_text
-                })
-                
-                q.put(("status", f"✅ Resposta obtida para {chave}: {response_text}"))
                 human_like_delay(0.3, 0.8)  # Human-like delay between searches
                 
             except Exception as e:
@@ -258,16 +358,16 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 not_found_protocols.append(chave)
                 continue
         
-        # Update SharePoint with collected responses
-        if response_data_list:
-            q.put(("status", f"Atualizando {len(response_data_list)} respostas no SharePoint..."))
+        # Update SharePoint with collected agenda data
+        if agenda_data_list:
+            q.put(("status", f"Atualizando {len(agenda_data_list)} dados de agenda no SharePoint..."))
             q.put(("progress", 85))
             
             # Run async update in thread
             update_queue = queue.Queue()
             update_thread = threading.Thread(
-                target=azure_update_response_in_thread,
-                args=(drive_id, file_id, response_data_list, update_queue)
+                target=azure_update_agenda_in_thread,
+                args=(drive_id, file_id, agenda_data_list, update_queue)
             )
             update_thread.start()
             update_thread.join()
@@ -275,11 +375,11 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
             try:
                 result = update_queue.get_nowait()
                 if isinstance(result, Exception):
-                    q.put(("status", f"❌ Erro ao atualizar respostas: {result}"))
+                    q.put(("status", f"❌ Erro ao atualizar dados de agenda: {result}"))
                 else:
-                    q.put(("status", "✅ Respostas atualizadas com sucesso no SharePoint"))
+                    q.put(("status", "✅ Dados de agenda atualizados com sucesso no SharePoint"))
             except queue.Empty:
-                q.put(("status", "⚠️ Atualização de respostas sem retorno"))
+                q.put(("status", "⚠️ Atualização de agenda sem retorno"))
         
         q.put(("progress", 95))
         
@@ -295,16 +395,16 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
         traceback.print_exc()
 
 
-def azure_update_response_in_thread(drive_id: str, file_id: str, response_data_list: list, result_queue: queue.Queue):
+def azure_update_agenda_in_thread(drive_id: str, file_id: str, agenda_data_list: list, result_queue: queue.Queue):
     """
-    Helper function to run async update_response_async in a thread.
+    Helper function to run async update_agenda_async in a thread.
     """
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         loop.run_until_complete(
-            update_response_async(drive_id, file_id, response_data_list)
+            update_agenda_async(drive_id, file_id, agenda_data_list)
         )
         
         result_queue.put("success")

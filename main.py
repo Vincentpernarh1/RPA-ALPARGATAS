@@ -129,10 +129,8 @@ def run_automation(playwright: Playwright, q: queue.Queue):
         )
         
         
-        
         page = context.new_page()
         time.sleep(1)
-
 
         # Order_datas_from_sharepoint(q)
         Login_and_Navigation(page, url, q, username, password)
