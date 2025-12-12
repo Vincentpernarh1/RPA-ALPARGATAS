@@ -258,18 +258,53 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 progress_value = 15 + int((idx / total_groups) * 70)
                 q.put(("progress", progress_value))
                 
+               
+                
                 page.get_by_role("textbox", name="Buscar demandas...").fill(protocol)
                                
                 page.get_by_role("link", name=f"Demanda #{protocol}").click()
                 page.get_by_role("button", name="Histórico").click()
-               
+                
+                page.pause()
+                
+                # Check if "Recebimento - Cancelada Fornecedor" is present
+                try:
+                    canceled_locator = page.locator("div").filter(has_text=re.compile(r"^Recebimento - Cancelada Fornecedor"))
+                    expect(canceled_locator.first).to_be_visible(timeout=5000)
+                    
+                    # Extract the full canceled text
+                    canceled_text = canceled_locator.first.text_content()
+                    
+                    # Append canceled data to list (set other fields to the canceled text)
+                    agenda_data_list.append({
+                        "chave": chave,
+                        "protocol": "Recebimento - Cancelada Fornecedor",
+                        "agenda_confirmada": canceled_text,
+                        "protocolo_agenda": canceled_text,
+                        "horario": canceled_text
+                    })
+                    
+                    q.put(("status", f"✅ Protocolo {protocol} cancelado: {canceled_text}"))
+                    # Go back to search page
+                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
+                    continue  # Skip to next protocol, do not check for approved
+                except AssertionError:
+                    # Not canceled, proceed to check for approved
+                    pass
+                
                 # Check if "Recebimento - Aprovada" is present
                 try:
                     # page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first.wait_for(state="visible", timeout=5000)
+                    
                     expect(page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first).to_be_visible(timeout=5000)
-                except TimeoutError:
+                except AssertionError:
                     q.put(("status", f"⚠️ Protocolo {protocol} não está aprovado ou elemento não encontrado. Pulando..."))
+                    # Go back to search page
+                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
                     continue
+            
+                page.pause()
+            
             
             
                 # Proceed to open the response list (class=rs-list) and click the first item
@@ -279,6 +314,8 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 except Exception as e:
                     q.put(("status", f"❌ Não foi possível abrir detalhes da demanda para protocolo {protocol}: {e}"))
                     not_found_protocols.append(chave)
+                    # Go back to search page
+                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
                     continue
 
                 # Extract demand number and date/time using partial text/regex
@@ -351,11 +388,17 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                     q.put(("status", f"⚠️ Dados incompletos para {chave}, pulando atualização"))
                     not_found_protocols.append(chave)
                 
+                # Go back to search page
+                page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
+                
                 human_like_delay(0.3, 0.8)  # Human-like delay between searches
+               
                 
             except Exception as e:
                 q.put(("status", f"❌ Erro ao processar {chave}: {e}"))
                 not_found_protocols.append(chave)
+                # Go back to search page
+                page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
                 continue
         
         # Update SharePoint with collected agenda data
