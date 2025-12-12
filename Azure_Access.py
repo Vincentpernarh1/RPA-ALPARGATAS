@@ -3,6 +3,7 @@ import os
 import pandas as pd
 from dotenv import load_dotenv
 import aiohttp
+import datetime as dt
 
 from azure.identity.aio import ClientSecretCredential
 from msgraph import GraphServiceClient
@@ -316,6 +317,12 @@ async def update_agenda_columns(graph_client: GraphServiceClient, drive_id: str,
         values = used_range.additional_data["values"]
         header, data = values[0], values[1:]
 
+        # Convert any datetime objects to strings to avoid JSON serialization errors
+        for row in data:
+            for idx, val in enumerate(row):
+                if isinstance(val, dt.datetime):
+                    row[idx] = str(val)
+
         # Find column indices
         col_indices = {}
         for idx, col_name in enumerate(header):
@@ -369,7 +376,7 @@ async def update_agenda_columns(graph_client: GraphServiceClient, drive_id: str,
                 if row_chave == item_chave and protocol_val == item_protocol:
                     # Update the three columns
                     row[col_indices['agenda_confirmada']] = item_agenda_confirmada
-                    row[col_indices['protocolo_agenda']] = item_protocolo_agenda
+                    row[col_indices['protocolo_agenda']] = f"'{item_protocolo_agenda}"  # Prefix with ' to ensure text format in Excel
                     row[col_indices['horario']] = item_horario
                     updated_count += 1
                     # print(f"  - Updated row: {row_chave} / {item_protocol} -> Agenda Confirmada: {item_agenda_confirmada}, Protocolo Agenda: {item_protocolo_agenda}, Horário: {item_horario}")

@@ -262,134 +262,161 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 
                 page.get_by_role("textbox", name="Buscar demandas...").fill(protocol)
                                
-                page.get_by_role("link", name=f"Demanda #{protocol}").click()
+                page.get_by_role("link", name=f"Demanda #{protocol}").click(timeout=4000)
                 page.get_by_role("button", name="Histórico").click()
                 
-                page.pause()
+                page.wait_for_timeout(2000)  # Wait for history to load
                 
-                # Check if "Recebimento - Cancelada Fornecedor" is present
-                try:
-                    canceled_locator = page.locator("div").filter(has_text=re.compile(r"^Recebimento - Cancelada Fornecedor"))
-                    expect(canceled_locator.first).to_be_visible(timeout=5000)
+                # Find the status in the gridcell
+                status_element = page.get_by_role("gridcell").filter(has_text=re.compile(r"^Recebimento - ")).first
+                if status_element.is_visible():
+                    status_text = status_element.text_content()
                     
-                    # Extract the full canceled text
-                    canceled_text = canceled_locator.first.text_content()
-                    
-                    # Append canceled data to list (set other fields to the canceled text)
-                    agenda_data_list.append({
-                        "chave": chave,
-                        "protocol": "Recebimento - Cancelada Fornecedor",
-                        "agenda_confirmada": canceled_text,
-                        "protocolo_agenda": canceled_text,
-                        "horario": canceled_text
-                    })
-                    
-                    q.put(("status", f"✅ Protocolo {protocol} cancelado: {canceled_text}"))
-                    # Go back to search page
-                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
-                    continue  # Skip to next protocol, do not check for approved
-                except AssertionError:
-                    # Not canceled, proceed to check for approved
-                    pass
-                
-                # Check if "Recebimento - Aprovada" is present
-                try:
-                    # page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first.wait_for(state="visible", timeout=5000)
-                    
-                    expect(page.locator("div").filter(has_text=re.compile(r"^Recebimento - Aprovada")).first).to_be_visible(timeout=5000)
-                except AssertionError:
-                    q.put(("status", f"⚠️ Protocolo {protocol} não está aprovado ou elemento não encontrado. Pulando..."))
-                    # Go back to search page
-                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
-                    continue
-            
-                page.pause()
-            
-            
-            
-                # Proceed to open the response list (class=rs-list) and click the first item
-                try:
-                    page.locator(".history-item-container").first.click()
-                    human_like_delay(0.2, 0.5)
-                except Exception as e:
-                    q.put(("status", f"❌ Não foi possível abrir detalhes da demanda para protocolo {protocol}: {e}"))
-                    not_found_protocols.append(chave)
-                    # Go back to search page
-                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
-                    continue
-
-                # Extract demand number and date/time using partial text/regex
-                try:
-                    # Define a locator for the visible details panel.
-                    details_panel = page.locator("div[id^='panel-']:has-text('Data efetiva entrega'):visible")
-                    
-                    # Ensure panel is ready before proceeding
-                    details_panel.wait_for(timeout=5000)
-
-                    # --- Extract demand number (scoped to the panel) ---
-                    demand_number = None
-                    demand_candidates = details_panel.locator("text=/Agendamento\\d{5,}/").all_text_contents()
-                    if demand_candidates:
-                        demand_number = demand_candidates[0]
-                    else:
-                        # Fallback
-                        demand_candidates = details_panel.locator("text=Agendamento").all_text_contents()
-                        if demand_candidates:
-                            demand_number = demand_candidates[0]
-
-                    # --- Extract date and time (from parent container) ---
-                    date_text = None
-                    date_time = None
-                    datetime_pattern = re.compile(r"(\d{2}/\d{2}/\d{4})[\s\S]*?(\d{2}:\d{2})")
-                    
-                    # Find the parent container of the "Data efetiva entrega" label.
-                    # This is more robust if the date is in a sibling element.
-                    date_container = details_panel.locator("text=/Data efetiva entrega.*/").first.locator("..")
-                    
-                    # Get text from that container and parse it
-                    full_date_text = date_container.text_content()
-                    
-                    date_text_parts = full_date_text.split('\n')
-                    if date_text_parts:
-                        date_text = date_text_parts[0].strip()
-
-                    datetime_match = datetime_pattern.search(full_date_text)
-                    if datetime_match:
-                        date_value = datetime_match.group(1)
-                        time_value = datetime_match.group(2)
-                        date_time = f"{date_value} {time_value}"
+                    if "Recebimento - Aprovada" in status_text:
+                        # Proceed to extract details
+                        page.locator(".history-item-container").first.click()
+                        human_like_delay(0.2, 0.5)
                         
-                        print("date Value here : ",date_value,"Time Value : ", time_value)
+                        # Extract demand number and date/time
+                        try:
+                            # Define a locator for the visible details panel.
+                            details_panel = page.locator("div[id^='panel-']:has-text('Data efetiva entrega'):visible")
+                            
+                            # Ensure panel is ready before proceeding
+                            details_panel.wait_for(timeout=5000)
+
+                            # --- Extract demand number (scoped to the panel) ---
+                            demand_number = None
+                            demand_candidates = details_panel.locator("text=/Agendamento\\d{5,}/").all_text_contents()
+                            if demand_candidates:
+                                demand_number = demand_candidates[0]
+                            else:
+                                # Fallback
+                                demand_candidates = details_panel.locator("text=Agendamento").all_text_contents()
+                                if demand_candidates:
+                                    demand_number = demand_candidates[0]
+
+                            # --- Extract date and time (from parent container) ---
+                            date_text = None
+                            date_time = None
+                            datetime_pattern = re.compile(r"(\d{2}/\d{2}/\d{4})[\s\S]*?(\d{2}:\d{2})")
+                            
+                            # Find the parent container of the "Data efetiva entrega" label.
+                            date_container = details_panel.locator("text=/Data efetiva entrega.*/").first.locator("..")
+                            
+                            # Get text from that container and parse it
+                            full_date_text = date_container.text_content()
+                            
+                            date_text_parts = full_date_text.split('\n')
+                            if date_text_parts:
+                                date_text = date_text_parts[0].strip()
+
+                            datetime_match = datetime_pattern.search(full_date_text)
+                            if datetime_match:
+                                date_value = datetime_match.group(1)
+                                time_value = datetime_match.group(2)
+                                date_time = f"{date_value} {time_value}"
+                                
+                                print("date Value here : ",date_value,"Time Value : ", time_value)
+                            else:
+                                date_value = ""
+                                time_value = ""
+                        except Exception as e:
+                            demand_number = ""
+                            date_value = ""
+                            time_value = ""
+                            q.put(("status", f"⚠️ Falha ao extrair detalhes para protocolo {protocol}: {e}"))
+
+                        # Parse demand_number to extract only the number part (remove "Agendamento" prefix)
+                        if demand_number and demand_number.startswith("Agendamento"):
+                            demand_number = demand_number.replace("Agendamento", "").strip()
+
+                        # Only append if all required values are present and not empty
+                        if date_value and demand_number and time_value:
+                            agenda_data_list.append({
+                                "chave": chave,
+                                "protocol": protocol,
+                                "agenda_confirmada": date_value,
+                                "protocolo_agenda": demand_number,
+                                "horario": time_value
+                            })
+
+                            q.put(("status", f"✅ Dados extraídos para {chave}: Agenda={date_value}, Protocolo Agenda={demand_number}, Horário={time_value}"))
+                        else:
+                            q.put(("status", f"⚠️ Dados incompletos para {chave}, pulando atualização"))
+                            not_found_protocols.append(chave)
+                        
+                    elif "Recebimento - Remanejamento" in status_text:
+                        # Proceed to extract details for remanejamento
+                        page.locator(".history-item-container").nth(1).click()
+                        human_like_delay(0.2, 0.5)
+                        
+                        # Extract date and time from "Data sugerida entrega"
+                        try:
+                            # Define a locator for the visible details panel.
+                            details_panel = page.locator("div[id^='panel-']:has-text('Data sugerida entrega'):visible")
+                            
+                            # Ensure panel is ready before proceeding
+                            details_panel.wait_for(timeout=5000)
+
+                            # --- Extract date and time (from parent container) ---
+                            datetime_pattern = re.compile(r"(\d{2}/\d{2}/\d{4})[\s\S]*?(\d{2}:\d{2})")
+                            
+                            # Find the parent container of the "Data sugerida entrega" label.
+                            date_container = details_panel.locator("text=/Data sugerida entrega.*/").first.locator("..")
+                            
+                            # Get text from that container and parse it
+                            full_date_text = date_container.text_content()
+                            
+                            datetime_match = datetime_pattern.search(full_date_text)
+                            if datetime_match:
+                                date_value = datetime_match.group(1)
+                                time_value = datetime_match.group(2)
+                                
+                                print("Remanejamento date Value here : ", date_value, "Time Value : ", time_value)
+                            else:
+                                date_value = ""
+                                time_value = ""
+                        except Exception as e:
+                            date_value = ""
+                            time_value = ""
+                            q.put(("status", f"⚠️ Falha ao extrair detalhes de remanejamento para protocolo {protocol}: {e}"))
+
+                        # Only append if date and time are present
+                        if date_value and time_value:
+                            agenda_data_list.append({
+                                "chave": chave,
+                                "protocol": protocol,  # Use the protocol number for matching
+                                "agenda_confirmada": date_value,
+                                "protocolo_agenda": "",  # Empty as requested
+                                "horario": time_value
+                            })
+
+                            q.put(("status", f"✅ Dados extraídos para remanejamento {chave}: Agenda={date_value}, Horário={time_value}"))
+                        else:
+                            q.put(("status", f"⚠️ Dados incompletos para remanejamento {chave}, pulando atualização"))
+                            not_found_protocols.append(chave)
+                        
                     else:
-                        date_value = ""
-                        time_value = ""
-                except Exception as e:
-                    demand_number = ""
-                    date_value = ""
-                    time_value = ""
-                    q.put(("status", f"⚠️ Falha ao extrair detalhes para protocolo {protocol}: {e}"))
-
-                # Parse demand_number to extract only the number part (remove "Agendamento" prefix)
-                if demand_number and demand_number.startswith("Agendamento"):
-                    demand_number = demand_number.replace("Agendamento", "").strip()
-
-                # Only append if all required values are present and not empty
-                if date_value and demand_number and time_value:
-                    agenda_data_list.append({
-                        "chave": chave,
-                        "protocol": protocol,
-                        "agenda_confirmada": date_value,
-                        "protocolo_agenda": demand_number,
-                        "horario": time_value
-                    })
-
-                    q.put(("status", f"✅ Dados extraídos para {chave}: Agenda={date_value}, Protocolo Agenda={demand_number}, Horário={time_value}"))
+                        # For other statuses (canceled, pendente, etc.), use the status text
+                        agenda_data_list.append({
+                            "chave": chave,
+                            "protocol": protocol,  # Use the protocol number for matching
+                            "agenda_confirmada": status_text,
+                            "protocolo_agenda": status_text,
+                            "horario": status_text
+                        })
+                        
+                        q.put(("status", f"✅ Protocolo {protocol} status: {status_text}"))
+                    
+                    # Go back to search page
+                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
+                    
                 else:
-                    q.put(("status", f"⚠️ Dados incompletos para {chave}, pulando atualização"))
-                    not_found_protocols.append(chave)
-                
-                # Go back to search page
-                page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
+                    q.put(("status", f"⚠️ Nenhum status 'Recebimento - ' encontrado para protocolo {protocol}. Pulando..."))
+                    # Go back to search page
+                    page.locator("section").get_by_role("button").filter(has_text=re.compile(r"^$")).click()
+                    continue
                 
                 human_like_delay(0.3, 0.8)  # Human-like delay between searches
                
