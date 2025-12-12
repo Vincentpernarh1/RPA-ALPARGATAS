@@ -415,10 +415,7 @@ def azure_update_agenda_in_thread(drive_id: str, file_id: str, agenda_data_list:
 
 
 def run_retorno_automation(playwright: Playwright, q: queue.Queue):
-    """
-    Main automation function for Pegar Retorno process.
-    Orchestrates login, data fetch, and protocol response collection.
-    """
+    
     try:
         q.put(("status", "Carregando credenciais..."))
         q.put(("progress", 1))

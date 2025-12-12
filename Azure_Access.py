@@ -215,11 +215,11 @@ async def update_protocol_rows(graph_client: GraphServiceClient, drive_id: str, 
                     # Update protocol column
                     row[col_indices['protocolo']] = item_protocol
                     updated_count += 1
-                    print(f"  - Updated row: {row_chave} / {carro_val} -> Protocol: {item_protocol}")
+                    # print(f"  - Updated row: {row_chave} / {carro_val} -> Protocol: {item_protocol}")
                     break
 
         updated_values = [header] + data
-        print(f"  - Prepared {updated_count} protocol updates to send...")
+        # print(f"  - Prepared {updated_count} protocol updates to send...")
 
         if updated_count == 0:
             print("  - No matching rows found to update.")
@@ -376,7 +376,7 @@ async def update_agenda_columns(graph_client: GraphServiceClient, drive_id: str,
                     break
 
         updated_values = [header] + data
-        print(f"  - Prepared {updated_count} agenda updates to send...")
+        # print(f"  - Prepared {updated_count} agenda updates to send...")
 
         if updated_count == 0:
             print("  - No matching rows found to update.")
@@ -435,7 +435,7 @@ async def update_protocol_async(drive_id: str, file_id: str, protocol_data_list:
     graph_client = get_graph_client()
     try:
         await update_protocol_rows(graph_client, drive_id, file_id, protocol_data_list)
-        print("✅ Protocol update completed successfully")
+        # print("✅ Protocol update completed successfully")
     except Exception as e:
         print(f"❌ Protocol update failed: {e}")
         import traceback

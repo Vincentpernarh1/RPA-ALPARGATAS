@@ -166,7 +166,6 @@ def retorno_process(q: queue.Queue):
         run_retorno_automation(playwright, q)
 
 
-
 # --- TKINTER APP SETUP ---
 class App:
     def __init__(self, root):

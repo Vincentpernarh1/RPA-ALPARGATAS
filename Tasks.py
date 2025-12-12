@@ -631,7 +631,7 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
                 data_button.click()
                 q.put(("status", "    -> Prosseguindo para o próximo passo (Data sugerida)"))
             except TimeoutError:
-                q.put(("status", "    -> ℹ️ Próximo passo ainda não disponível"))
+                q.put(("status", "    -> ℹ️ Botão 'Data sugerida para entrega' não encontrado, prosseguindo..."))
             
             q.put(("status", "    ✅ Processo de envio de arquivo concluído"))
             
@@ -698,10 +698,10 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 col_mapping['codigo_produto'] = col_idx
         
         # Log found columns for debugging
-        print(f"Headers found: {headers}")
+        # print(f"Headers found: {headers}")
         q.put(("status", f"    -> Colunas do Excel encontradas: {len(headers)} colunas detectadas"))
-        print(f"Column mapping: {col_mapping}")
-        print(f"Items to match: {len(items)} items")
+        # print(f"Column mapping: {col_mapping}")
+        # print(f"Items to match: {len(items)} items")
         
         # Process data rows (starting from row 4, since headers are in row 3)
         row_num = 4
@@ -730,7 +730,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 item_chave = str(item.get('chave_pedido_loja', '')).strip()
                 item_produto = str(item.get('produto_interno_cliente', '')).strip()
 
-                print(f"  Checking item: chave={item_chave}, produto={item_produto}")
+                # print(f"  Checking item: chave={item_chave}, produto={item_produto}")
                 
                 if item_chave == code_pedido and item_produto == code_produto:
                     matching_item = item
@@ -749,7 +749,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 if col_mapping['data_sugerida']:
                     data_val = matching_item.get('data_deprevisao_de_entrega')
                     
-                    print(f"    -> Raw Data sugerida: {data_val}")
+                    # print(f"    -> Raw Data sugerida: {data_val}")
                     # Convert to datetime and set as date format
                     try:
                         from datetime import datetime, timedelta
@@ -787,7 +787,7 @@ def processar_excel_com_dados(file_path: str, items: list, q):
                 if col_mapping['caracteristica_carga']:
                     carga_val = matching_item.get('caracteristica')
                     ws.range(row_num, col_mapping['caracteristica_carga']).value = carga_val
-                    print(f"    -> Set Característica da carga: {carga_val}")
+                    # print(f"    -> Set Característica da carga: {carga_val}")
                 
                 # Fill Demanda with chave_pedido_loja-CARRO
                 if col_mapping['demanda']:
@@ -920,7 +920,6 @@ def Extrair_logs_de_upload_e_Atualizar_sharepoint(page: Page, chave: str, carro:
             protocol = f"ERRO: Exception during extraction - {str(extract_err)}"
         
        
-        
         # Return data with protocol (which could be success protocol number or error message)
         return {
             "chave": chave,
