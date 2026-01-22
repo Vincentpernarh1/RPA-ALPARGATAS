@@ -267,7 +267,7 @@ class App:
         right_footer = tk.Frame(footer_frame, bg=stellantis_blue)
         right_footer.pack(side=tk.RIGHT, padx=15, pady=10)
         
-        footer_label = tk.Label(right_footer, text="Desenvolvido por: Vincent Pernarh", font=("Segoe UI", 9), fg="white", bg=stellantis_blue)
+        footer_label = tk.Label(right_footer, text="Desenvolvido por: LLP-Brazil ", font=("Segoe UI", 9), fg="white", bg=stellantis_blue)
         footer_label.pack(anchor="e")
 
     def start_processing_thread(self):
