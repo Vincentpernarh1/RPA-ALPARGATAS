@@ -34,15 +34,7 @@ import time
 
 import random
 
-from azure.identity.aio import ClientSecretCredential
-from msgraph import GraphServiceClient
-from msgraph.generated.models.o_data_errors.o_data_error import ODataError
-from msgraph.generated.sites.item.drives.drives_request_builder import DrivesRequestBuilder
-from msgraph.generated.drives.item.items.item.workbook.worksheets.item.used_range.used_range_request_builder import UsedRangeRequestBuilder
-
-
-
-from Azure_Access import main, update_excel_rows, update_protocol_async
+from RestAPIHelper import main, update_excel_rows, update_protocol_async
 
 base_path = os.getcwd()
 
@@ -111,7 +103,7 @@ def convert_excel_date(excel_value):
     
 
 # +++++++++ HELPER FUNCTION TO RUN ASYNC IN A THREAD +++++++++
-def azure_main_in_thread(result_queue: queue.Queue):
+def sharepoint_main_in_thread(result_queue: queue.Queue):
    
     try:
         # Create and set a new event loop for this thread
@@ -154,40 +146,38 @@ def update_sharepoint_protocol_in_thread(drive_id: str, file_id: str, protocol_d
 
 def Order_datas_from_sharepoint(q):
     
-    q.put(("status", "Obtendo dados do Azure..."))
+    q.put(("status", "Obtendo dados do SharePoint..."))
     result_queue = queue.Queue() # A new queue just for this thread's result
-    
+
     # Create and start the thread, targeting our new helper function
-    azure_thread = threading.Thread(target=azure_main_in_thread, args=(result_queue,))
-    azure_thread.start()
-    
+    sharepoint_thread = threading.Thread(target=sharepoint_main_in_thread, args=(result_queue,))
+    sharepoint_thread.start()
+
     # Wait for the thread to finish its work
-    azure_thread.join() # <--- You are here. The thread is finished.
-                     
+    sharepoint_thread.join() # <--- You are here. The thread is finished.
+
     try:
         # 1. Get the item from the queue
-        result = result_queue.get_nowait() 
+        result = result_queue.get_nowait()
         if isinstance(result, Exception):
             # If the thread sent back an error, handle it
-            q.put(("status", f"❌ Erro ao obter dados do Azure: {result}"))
+            q.put(("status", f"❌ Erro ao obter dados do SharePoint: {result}"))
             raise result # Re-raise the error
-        
+
         df, drive_id, file_id = result
         # df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
-        
+
         df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
 
-        q.put(("status", "✅ Dados do Azure obtidos com sucesso."))
-        
-        return df, drive_id, file_id
+        q.put(("status", "✅ Dados do SharePoint obtidos com sucesso."))
 
     except queue.Empty:
         # This shouldn't happen if join() worked, but it's safe to have
-        q.put(("status", "❌ Thread do Azure finalizou sem resultado."))
+        q.put(("status", "❌ Thread do SharePoint finalizou sem resultado."))
         return None, None, None
     except Exception as e:
         # Handle any other error
-        q.put(("status", f"❌ Falha ao processar resultado do Azure: {e}"))
+        q.put(("status", f"❌ Falha ao processar resultado do SharePoint: {e}"))
         return None, None, None
 
 
