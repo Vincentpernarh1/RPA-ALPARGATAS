@@ -111,9 +111,10 @@ def Order_datas_from_sharepoint(q):
             raise result # Re-raise the error
         
         df, drive_id, file_id = result
-        # df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
         
-        df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
+        
+        df = df[df['Nº Pedido Cliente'].notna()].copy()
+        df['chave_pedido_loja'] = df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
 
         q.put(("status", "✅ Dados do Azure obtidos com sucesso."))
         
@@ -188,7 +189,6 @@ def Login_and_Navigation(page: Page, url, q, username, password):
         human_like_delay(0.1, 0.5)
         page.get_by_role("button", name="Entrar").click()
         
-        q.put(("status", "✅ Login realizado com sucesso"))
         q.put(("progress", 10))
        
         try:
@@ -217,10 +217,9 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
         
         # Get unique protocols grouped by chave_pedido_loja
         df=df[df["Nº Pedido Cliente"].notna()].copy()
-        unique_groups = df.groupby('chave_pedido_loja').first().reset_index()
-        print(df)
         
-      
+        # grouped_by_carro = loja_df.groupby('CARRO')
+        unique_groups = df.groupby('CARRO').first().reset_index()
         
         q.put(("status", f"Encontrados {len(unique_groups)} grupos únicos para processar"))
         
@@ -262,8 +261,6 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 progress_value = 15 + int((idx / total_groups) * 70)
                 q.put(("progress", progress_value))
                 
-               
-                
                 page.get_by_role("textbox", name="Buscar demandas...").fill(protocol)
                                
                 page.get_by_role("link", name=f"Demanda #{protocol}").click(timeout=4000)
@@ -271,12 +268,14 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                 
                 page.wait_for_timeout(2000)  # Wait for history to load
                 
+                
+                page.pause()
                 # Find the status in the gridcell
                 status_element = page.get_by_role("gridcell").filter(has_text=re.compile(r"^Recebimento - ")).first
                 if status_element.is_visible():
                     status_text = status_element.text_content()
                     
-                    if "Recebimento - Aprovada" in status_text:
+                    if "Recebimento - Aprovada" in status_text and "No-show" not in status_text:
                         # Proceed to extract details
                         page.locator(".history-item-container").first.click()
                         human_like_delay(0.2, 0.5)
@@ -350,7 +349,7 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                             q.put(("status", f"⚠️ Dados incompletos para {chave}, pulando atualização"))
                             not_found_protocols.append(chave)
                         
-                    elif "Recebimento - Remanejamento" in status_text:
+                    elif "Recebimento - Remanejamento" in status_text  and "No-show" not in status_text:
                         # Proceed to extract details for remanejamento
                         page.locator(".history-item-container").nth(1).click()
                         human_like_delay(0.2, 0.5)
@@ -377,7 +376,6 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
                                 date_value = datetime_match.group(1)
                                 time_value = datetime_match.group(2)
                                 
-                                print("Remanejamento date Value here : ", date_value, "Time Value : ", time_value)
                             else:
                                 date_value = ""
                                 time_value = ""
