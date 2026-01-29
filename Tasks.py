@@ -163,13 +163,17 @@ def Order_datas_from_sharepoint(q):
             # If the thread sent back an error, handle it
             q.put(("status", f"❌ Erro ao obter dados do SharePoint: {result}"))
             raise result # Re-raise the error
-
+       
         df, drive_id, file_id = result
-        # df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
-
-        df['chave_pedido_loja'] =df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
-
+        
+        # Cleaning up the dataframe to remove none values
+        df = df[df['Nº Pedido Cliente'].notna()].copy()
+        
+        df['chave_pedido_loja'] = df['Nº Pedido Cliente'].astype(str) + '-' + df['CÓD LOJA'].astype(str).str.split('-').str[0]
+      
         q.put(("status", "✅ Dados do SharePoint obtidos com sucesso."))
+
+        return df, drive_id, file_id
 
     except queue.Empty:
         # This shouldn't happen if join() worked, but it's safe to have
@@ -261,9 +265,11 @@ def process_orders(page: Page, q):
     static_data = load_static_data()  # Load static data at the start
     try:
         q.put(("progress", 10))
-        q.put(("status", "Obtendo dados de pedidos do SharePoint..."))
-        df, drive_id, file_id = Order_datas_from_sharepoint(q)
 
+        df, drive_id, file_id = Order_datas_from_sharepoint(q)
+        
+    
+        
         if df is None or df.empty:
             q.put(("status", "⚠️ Nenhum dado de pedido encontrado para processar."))
             return
@@ -332,7 +338,7 @@ def process_orders(page: Page, q):
                         q.put(("status", f"        --- Buscando chave {chave} para CARRO {carro} ---"))
                         
                         chave_input = frame_locator.locator(".dx-texteditor-input").first
-                        chave_input.fill(chave)
+                        chave_input.fill(chave.strip())
                         
                         page.wait_for_timeout(2000)  # 2 seconds
                         
@@ -366,10 +372,16 @@ def process_orders(page: Page, q):
                             numero_cliente = row['Nº Pedido Cliente']
                             data_deprevisao_de_entrega = row['PREVISÃO DE ENTREGA']
                             
+                            # Convert Qtd. Faturada to numeric
+                            qtd_faturada = pd.to_numeric(row['Qtd. Faturada'], errors='coerce')
+                            if pd.isna(qtd_faturada):
+                                q.put(("status", f"            -> ⚠️ Qtd. Faturada inválida para produto {produto_interno_cliente}, pulando item."))
+                                continue
+                            
                             if "TRADICIONAL" in row['Descrição']:
-                                quantidade = (row['Qtd. Faturada']/24)
+                                quantidade = (qtd_faturada / 24)
                             else:
-                                quantidade = (row['Qtd. Faturada']/12)
+                                quantidade = (qtd_faturada / 12)
                             
                             q.put(("status", f"            -> Filtrando produto: {produto_interno_cliente} para chave {chave}"))
                             
@@ -515,8 +527,8 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
     download.save_as(save_path)
 
     # Process the Excel file with xlwings
-    pedidos = processar_excel_com_dados(save_path, items,q)
-    if pedidos == 'Done':
+    matched_count = processar_excel_com_dados(save_path, items,q)
+    if matched_count > 0:
         print("Excel processing completed successfully.")
         q.put(("status", "    ✅ Processamento do Excel concluído com sucesso."))
 
@@ -620,6 +632,9 @@ def processar_e_Fazer_upload_Arquivos(page: Page, items: list, q, drive_id: str 
             print(f"Upload error: {e}")
             import traceback
             traceback.print_exc()
+
+    else:
+        q.put(("status", "    ⚠️ Nenhum item correspondente encontrado no Excel. Pulando envio."))
 
     time.sleep(2)
 
@@ -825,13 +840,14 @@ def processar_excel_com_dados(file_path: str, items: list, q):
         
         q.put(("status", f"    ✅ Arquivo Excel processado e salvo"))
         print(f"✅ Excel file processed and saved: {file_path}")
-        return 'Done'
+        return matched_count
         
     except Exception as e:
         print(f"❌ Error processing Excel file: {e}")
         q.put(("status", f"    ❌ Erro ao processar Excel: {e}"))
         import traceback
         traceback.print_exc()
+        return 0
 
 
 

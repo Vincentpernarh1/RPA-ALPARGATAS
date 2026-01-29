@@ -1,5 +1,8 @@
+import base64
+import tempfile
 import os
-import json
+import xlwings as xw
+from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import aiohttp
 from urllib.parse import quote
@@ -337,41 +340,232 @@ def parse_excel_to_dataframe(excel_bytes: bytes) -> pd.DataFrame | None:
 
 
 # ---------------- UPDATE FUNCTIONS (REST API versions) ----------------
+def update_excel_local(file_path: str, updates: list[dict]):
+    """Update Excel file locally using xlwings"""
+    with xw.App(visible=False) as app:
+        wb = app.books.open(file_path)
+        sheet = wb.sheets['Planilha1']
+        for update in updates:
+            if 'address' in update and 'values' in update:
+                sheet.range(update['address']).value = update['values']
+        wb.save()
+        wb.close()
+
+
+async def update_file_content(base_api_url: str, drive_id: str, folder_id: str, file_name: str, local_file_path: str):
+    """Update file content using the custom API upload/small endpoint to overwrite"""
+    # Refresh token (expires every 5 minutes)
+    bearer_token = get_token()
+    if not bearer_token:
+        print("❌ Failed to get bearer token for update")
+        return False
+
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+
+    endpoint = f"{base_api_url}/upload/small"
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        try:
+            with open(local_file_path, 'rb') as f:
+                data = aiohttp.FormData()
+                data.add_field('driveId', drive_id)
+                data.add_field('parentItemId', folder_id)
+                data.add_field('name', file_name)
+                data.add_field('file', f, filename=file_name, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                
+                async with session.post(endpoint, data=data) as response:
+                    if response.ok:
+                        print("✅ File updated successfully on SharePoint")
+                        return True
+                    else:
+                        error = await response.text()
+                        print(f"❌ Failed to update file: {response.status} - {error}")
+                        return False
+        except Exception as e:
+            print(f"❌ Error updating file: {e}")
+            return False
+
+
+async def get_folder_id_by_path(base_api_url: str, drive_id: str, folder_path: str) -> str | None:
+    """Get folder ID by path"""
+    # Refresh token (expires every 5 minutes)
+    bearer_token = get_token()
+    if not bearer_token:
+        print("❌ Failed to get bearer token")
+        return None
+
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        path_segments = folder_path.split('/')
+        if not path_segments or path_segments == ['']:
+            return drive_id  # Root
+
+        parent_path = "/".join(path_segments[:-1])
+        folder_name = path_segments[-1]
+
+        if parent_path:
+            files_url = f"{base_api_url}/drives/listContentFolder/{quote(drive_id)}/{quote(parent_path)}"
+        else:
+            files_url = f"{base_api_url}/drives/listFolder/{drive_id}"
+
+        try:
+            async with session.get(files_url) as files_response:
+                if not files_response.ok:
+                    print(f"❌ Failed to list parent folder: {files_response.status}")
+                    error = await files_response.text()
+                    print(f"   Error: {error[:300]}")
+                    return None
+
+                files_content = await files_response.json()
+
+                files = files_content if isinstance(files_content, list) else files_content.get("value", [])
+
+                for item in files:
+                    if item.get("name", "").lower() == folder_name.lower():
+                        return item.get("id")
+
+                print(f"❌ Folder '{folder_name}' not found in parent")
+                return None
+
+        except Exception as e:
+            print(f"   Error getting folder ID: {e}")
+            return None
+
+
 async def update_excel_rows(drive_id: str, file_id: str, lookup_values: list[str]):
-    """Legacy function - placeholder for compatibility"""
-    print("⚠️ update_excel_rows called but not implemented in REST API version")
-    print(f"  - Would update {len(lookup_values)} values")
+    """Update lookup values in the Excel file (assumes Planilha1!A column starting from row 2)"""
+    base_api_url = "https://api-storage.connectedcontroltower.com.br/api/Sharepoint"
+    
+    # Download the file
+    excel_bytes = await download_file_directly(base_api_url, drive_id, file_id)
+    if not excel_bytes:
+        print("❌ Failed to download file for update")
+        return False
+    
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+        temp_file.write(excel_bytes)
+        temp_path = temp_file.name
+    
+    try:
+        # Prepare updates
+        updates = [{'address': f'A{i+2}', 'values': value} for i, value in enumerate(lookup_values)]
+        
+        # Update locally in thread
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, update_excel_local, temp_path, updates)
+        
+        # Get folder ID
+        folder_path = "Geral Alpargatas LLP/19. Base RPA"
+        folder_id = await get_folder_id_by_path(base_api_url, drive_id, folder_path)
+        if not folder_id:
+            print("❌ Failed to get folder ID")
+            return False
+        
+        # Upload back
+        file_name = "CARTEIRA GRUPO ASSAÍ.xlsx"
+        success = await update_file_content(base_api_url, drive_id, folder_id, file_name, temp_path)
+        return success
+    finally:
+        os.unlink(temp_path)
 
 
 async def update_protocol_async(drive_id: str, file_id: str, protocol_data_list: list[dict]):
-    """Async wrapper for protocol updates - placeholder for compatibility"""
-    print("⚠️ update_protocol_async called but not implemented in REST API version")
-    print(f"  - Would update {len(protocol_data_list)} protocol entries")
+    """Update protocol values in the Excel file (Planilha1!CK column)"""
+    base_api_url = "https://api-storage.connectedcontroltower.com.br/api/Sharepoint"
+    
+    # Download the file
+    excel_bytes = await download_file_directly(base_api_url, drive_id, file_id)
+    if not excel_bytes:
+        print("❌ Failed to download file for update")
+        return False
+    
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+        temp_file.write(excel_bytes)
+        temp_path = temp_file.name
+    
+    try:
+        # Prepare updates
+        updates = [{'address': f'CK{item["row"]}', 'values': item['value']} for item in protocol_data_list if 'row' in item and 'value' in item]
+        
+        # Update locally in thread
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, update_excel_local, temp_path, updates)
+        
+        # Get folder ID
+        folder_path = "Geral Alpargatas LLP/19. Base RPA"
+        folder_id = await get_folder_id_by_path(base_api_url, drive_id, folder_path)
+        if not folder_id:
+            print("❌ Failed to get folder ID")
+            return False
+        
+        # Upload back
+        file_name = "CARTEIRA GRUPO ASSAÍ.xlsx"
+        success = await update_file_content(base_api_url, drive_id, folder_id, file_name, temp_path)
+        return success
+    finally:
+        os.unlink(temp_path)
 
 
 async def update_agenda_async(drive_id: str, file_id: str, agenda_data_list: list[dict]):
-    """Async wrapper for agenda updates - placeholder for compatibility"""
-    print("⚠️ update_agenda_async called but not implemented in REST API version")
-    print(f"  - Would update {len(agenda_data_list)} agenda entries")
+    """Update agenda values in the Excel file (Planilha1!CJ column)"""
+    base_api_url = "https://api-storage.connectedcontroltower.com.br/api/Sharepoint"
+    
+    # Download the file
+    excel_bytes = await download_file_directly(base_api_url, drive_id, file_id)
+    if not excel_bytes:
+        print("❌ Failed to download file for update")
+        return False
+    
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+        temp_file.write(excel_bytes)
+        temp_path = temp_file.name
+    
+    try:
+        # Prepare updates
+        updates = [{'address': f'CJ{item["row"]}', 'values': item['value']} for item in agenda_data_list if 'row' in item and 'value' in item]
+        
+        # Update locally in thread
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, update_excel_local, temp_path, updates)
+        
+        # Get folder ID
+        folder_path = "Geral Alpargatas LLP/19. Base RPA"
+        folder_id = await get_folder_id_by_path(base_api_url, drive_id, folder_path)
+        if not folder_id:
+            print("❌ Failed to get folder ID")
+            return False
+        
+        # Upload back
+        file_name = "CARTEIRA GRUPO ASSAÍ.xlsx"
+        success = await update_file_content(base_api_url, drive_id, folder_id, file_name, temp_path)
+        return success
+    finally:
+        os.unlink(temp_path)
 
 
 # ---------------- MAIN ----------------
 async def main():
     try:
         site_id = SITE_ID
-        print(f"Connecting to SharePoint site: {site_id}")
+        # print(f"Connecting to SharePoint site: {site_id}")
 
         df, drive_id, file_id = await find_and_read_excel_file(site_id)
-
-        if df is not None and not df.empty:
-            print(f"✅ Successfully retrieved Excel data with {len(df)} rows")
-            print(df.head())
-        else:
-            print("❌ Failed to retrieve Excel data")
+        
+        # print(df.head(10))
+        
+        return df, drive_id, file_id
 
     except Exception as ex:
         print(f"❌ Unexpected error: {ex}")
+        return None, None, None
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# if __name__ == "__main__":
+#     asyncio.run(main())

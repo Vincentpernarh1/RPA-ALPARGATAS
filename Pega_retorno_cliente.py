@@ -216,7 +216,11 @@ def process_protocol_responses(page: Page, df, drive_id, file_id, q):
         q.put(("progress", 15))
         
         # Get unique protocols grouped by chave_pedido_loja
+        df=df[df["Nº Pedido Cliente"].notna()].copy()
         unique_groups = df.groupby('chave_pedido_loja').first().reset_index()
+        print(df)
+        
+      
         
         q.put(("status", f"Encontrados {len(unique_groups)} grupos únicos para processar"))
         
@@ -553,6 +557,7 @@ def run_retorno_automation(playwright: Playwright, q: queue.Queue):
         
         # Step 2: Get data from SharePoint
         df, drive_id, file_id = Order_datas_from_sharepoint(q)
+        
         
         if df is None or df.empty:
             q.put(("status", "❌ Nenhum dado obtido do SharePoint"))
